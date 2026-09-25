@@ -206,6 +206,10 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .kpi.alerta b{color:var(--bad)}
 .kpi small{display:block;font-size:12px;color:var(--muted);margin-top:2px}
 .hbar b{text-align:right}
+.semanal{border-left:5px solid var(--yellow)}
+.item .ordem{width:24px;height:24px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);display:grid;place-items:center;font:700 13px "Barlow Condensed",sans-serif;flex:none}
+.item.travado{opacity:.55}
+.panel.trava{border-color:var(--bad);border-width:2px}
 </style>
 </head>
 <body>
@@ -272,7 +276,7 @@ const S = {
   mes: todayStr().slice(0, 7), mesAuds: [], mesAtrib: {},
   progRef: todayStr(), progDias: [], progAuds: {},
   ocsHoje: [], emAnalise: [], pendAbertas: [], verifHoje: [], todasOcs: null,
-  ind: { per: "30", ini: "", fim: "", dados: null },
+  ind: { per: "30", ini: "", fim: "", dados: null, sem: segundaDe(todayStr()) },
   hist: { mes: todayStr().slice(0, 7), auditor: "", status: "", auds: null, aberto: {} }, logo: undefined,
   pf: { status: "abertas", grav: "", setor: "", auditor: "", resp: "", q: "", ord: "dias" },
   busy: false,
@@ -283,10 +287,10 @@ function toast(m) { const t = $("#toast"); t.textContent = m; t.style.display = 
 const porOrdem = (a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || String(a.nome).localeCompare(String(b.nome));
 const stTxt = { pendente: "Pendente", em_andamento: "Em andamento", concluido: "Concluído" };
 const gravTxt = { baixa: "Baixa", media: "Média", alta: "Alta", critica: "Crítica" };
-const ocStTxt = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada" };
-const ocStBadge = { em_analise: "b-baixa", pendente: "b-pend", parcialmente_resolvida: "b-media", resolvida: "b-ok", cancelada: "b-neutral" };
+const ocStTxt = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada", substituida: "Substituída" };
+const ocStBadge = { em_analise: "b-baixa", pendente: "b-pend", parcialmente_resolvida: "b-media", resolvida: "b-ok", cancelada: "b-neutral", substituida: "b-neutral" };
 const acaoTxt = { resolvido_hora: "Resolvido na hora", encaminhado: "Encaminhado", nao_possivel: "Não foi possível" };
-const verifTxt = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua pendente" };
+const verifTxt = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua (registrada de novo)" };
 const verifBadge = { resolvido: "b-ok", parcialmente_resolvido: "b-media", continua_pendente: "b-pend" };
 const GRAV_PESO = { critica: 4, alta: 3, media: 2, baixa: 1 };
 const FOTO_CAMPOS = ["foto_antes_id", "foto_depois_id", "foto_solucao_id"];
@@ -464,6 +468,8 @@ async function iniciar() {
 async function abrirSetor(setId) {
   const s = S.audSet.find(x => x.id === setId);
   if (!s) return;
+  if (S.modo === "exec" && S.aud?.status === "em_andamento" && s.status !== "concluido" && !setorLiberado(setId))
+    throw falha(`Siga a ordem: conclua ${setorDaVez()?.setor_nome || "o setor anterior"} primeiro.`);
   S.setorAtual = setId; S.view = "setor"; scrollTo(0, 0);
   if (S.modo === "exec" && s.status === "pendente" && S.aud?.status === "em_andamento")
     await updateDoc(doc(db, "auditoria_setores", setId), { status: "em_andamento", horario_inicio: nowISO() });
@@ -477,6 +483,8 @@ async function concluirSetor() {
     if (!s.exists() || !a.exists()) throw falha("Auditoria não encontrada.");
     if (a.data().status !== "em_andamento") throw falha("Esta auditoria não está mais em andamento.");
     if (s.data().status === "concluido") return;
+    const falta = faltaNoSetor(s.data().setor_id).length;
+    if (falta) throw falha(`Confira ${falta} pendência(s) deste setor antes de concluir.`);
     nome = s.data().setor_nome;
     tx.update(ref, { status: "concluido", horario_conclusao: nowISO(), horario_inicio: s.data().horario_inicio || nowISO() });
     tx.update(audRef, { setores_concluidos: (a.data().setores_concluidos || 0) + 1 });
@@ -487,6 +495,16 @@ async function concluirSetor() {
 const pendDoDia = () => S.pendAbertas.filter(o => o.auditoria_data < S.hoje);
 const verifDe = id => S.verifHoje.find(v => v.ocorrencia_id === id);
 const faltaConferir = () => pendDoDia().filter(o => !verifDe(o.id));
+const pendDoSetor = setorId => pendDoDia().filter(o => o.setor_id === setorId);
+const faltaNoSetor = setorId => pendDoSetor(setorId).filter(o => !verifDe(o.id));
+const setoresNaAuditoria = () => new Set(S.audSet.map(s => s.setor_id));
+const pendOrfas = () => pendDoDia().filter(o => !setoresNaAuditoria().has(o.setor_id));
+// setor da vez: o primeiro (na ordem) ainda não concluído; os de antes estão concluídos
+function setorLiberado(audSetId) {
+  const i = S.audSet.findIndex(s => s.id === audSetId);
+  return i >= 0 && S.audSet.slice(0, i).every(s => s.status === "concluido");
+}
+const setorDaVez = () => S.audSet.find(s => s.status !== "concluido") || null;
 const setoresOk = () => S.audSet.length > 0 && S.audSet.every(s => s.status === "concluido");
 function podeFinalizar() { return S.aud?.status === "em_andamento" && setoresOk() && faltaConferir().length === 0; }
 async function finalizar(obs) {
@@ -500,6 +518,9 @@ async function finalizar(obs) {
   toast("Auditoria finalizada");
   const id = S.aud.id;
   try { await gerarRelatorioDocx(id); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o Word agora") + ". Use o botão Baixar relatório."); }
+  if (dow(S.hoje) === 5) {
+    try { await gerarRelatorioSemanal(segundaDe(S.hoje)); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o relatório da semana") + ". Use o botão em Indicadores."); }
+  }
 }
 async function reiniciar() {
   if (!S.isAdmin || !S.aud) return;
@@ -566,24 +587,28 @@ function hydrateFotos() {
 }
 
 let F = null;
-function modalRegistrar() {
-  const s = S.audSet.find(x => x.id === S.setorAtual);
+function modalRegistrar(ref = null) {
+  const s = ref ? (S.audSet.find(x => x.setor_id === ref.setor_id) || S.audSet.find(x => x.id === S.setorAtual)) : S.audSet.find(x => x.id === S.setorAtual);
   if (!s || !S.aud) return;
-  F = { grav: "media", acao: "encaminhado", fotos: {}, setor: s };
+  F = { grav: ref?.gravidade || "media", acao: ref ? (ref.acao_realizada === "resolvido_hora" ? "encaminhado" : ref.acao_realizada) : "encaminhado", fotos: {}, setor: s, ref };
+  const val = k => esc(ref?.[k] || "");
   const chips = (k, pares, atual) => `<div class="chips">${pares.map(([v, l]) => `<button type="button" data-act="chip" data-k="${k}" data-v="${v}" class="${v === atual ? "on" : ""}">${l}</button>`).join("")}</div>`;
-  abrirModal(`<h2>Registrar ocorrência</h2>
+  const tipos = S.tipos.filter(t => t.ativo).map(t => t.nome);
+  if (ref && !tipos.includes(ref.tipo_ocorrencia)) tipos.unshift(ref.tipo_ocorrencia);
+  abrirModal(`<h2>${ref ? "Registrar de novo" : "Registrar ocorrência"}</h2>
+  ${ref ? `<div class="note">Continuação de <b>${esc(ref.numero)}</b> de ${brData(ref.auditoria_data)}. A ${esc(ref.numero)} será encerrada como substituída.</div>` : ""}
   <div class="auto">${esc(s.setor_nome)} · auditor ${esc(S.aud.colaborador_nome)} · data e hora registradas automaticamente</div>
-  <div class="field"><label for="oTipo">Tipo *</label><select id="oTipo"><option value="">Escolha…</option>${S.tipos.filter(t => t.ativo).map(t => `<option>${esc(t.nome)}</option>`).join("")}</select></div>
-  <div class="grid g2" style="gap:8px"><div class="field"><label for="oCod">Código do produto</label><input id="oCod" placeholder="Ex.: 57087.162.0/2" autocapitalize="none"></div>
-  <div class="field"><label for="oPDesc">Descrição do produto</label><input id="oPDesc"></div></div>
-  <div class="field"><label for="oLocal">Local / endereço</label><input id="oLocal" placeholder="Ex.: 3A203605" autocapitalize="characters"></div>
-  <div class="field"><label for="oDesc">O que foi encontrado *</label><textarea id="oDesc" rows="2"></textarea></div>
-  <div class="field"><label>Gravidade</label>${chips("grav", [["baixa", "Baixa"], ["media", "Média"], ["alta", "Alta"], ["critica", "Crítica"]], "media")}</div>
-  <div class="field"><label>Ação realizada</label>${chips("acao", [["resolvido_hora", "Resolvido na hora"], ["encaminhado", "Encaminhado"], ["nao_possivel", "Não foi possível"]], "encaminhado")}</div>
+  <div class="field"><label for="oTipo">Tipo *</label><select id="oTipo"><option value="">Escolha…</option>${tipos.map(t => `<option ${ref?.tipo_ocorrencia === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></div>
+  <div class="grid g2" style="gap:8px"><div class="field"><label for="oCod">Código do produto</label><input id="oCod" placeholder="Ex.: 57087.162.0/2" autocapitalize="none" value="${val("produto_codigo")}"></div>
+  <div class="field"><label for="oPDesc">Descrição do produto</label><input id="oPDesc" value="${val("produto_descricao")}"></div></div>
+  <div class="field"><label for="oLocal">Local / endereço</label><input id="oLocal" placeholder="Ex.: 3A203605" autocapitalize="characters" value="${val("local")}"></div>
+  <div class="field"><label for="oDesc">O que foi encontrado *</label><textarea id="oDesc" rows="2">${val("descricao")}</textarea></div>
+  <div class="field"><label>Gravidade</label>${chips("grav", [["baixa", "Baixa"], ["media", "Média"], ["alta", "Alta"], ["critica", "Crítica"]], F.grav)}</div>
+  <div class="field"><label>Ação realizada</label>${chips("acao", [["resolvido_hora", "Resolvido na hora"], ["encaminhado", "Encaminhado"], ["nao_possivel", "Não foi possível"]], F.acao)}</div>
   <div class="field"><label>Fotos</label><div class="row">
     <button type="button" class="fslot" data-act="foto" data-v="antes"><img alt="" hidden><span id="lbAntes">Foto antes</span></button>
     <button type="button" class="fslot" data-act="foto" data-v="depois"><img alt="" hidden><span id="lbDepois">Foto depois</span></button></div></div>
-  <div class="field"><label for="oResp" id="lbResp">Responsável</label><input id="oResp" placeholder="Quem vai tratar"></div>
+  <div class="field"><label for="oResp" id="lbResp">Responsável</label><input id="oResp" placeholder="Quem vai tratar" value="${val("responsavel")}"></div>
   <div class="field"><label for="oObs">Observação</label><input id="oObs"></div>
   <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-oc">Salvar ocorrência</button></div>`);
   atualizarObrigatorios();
@@ -611,20 +636,25 @@ async function salvarOcorrencia() {
   if (S.config.foto_obrigatoria !== false && !F.fotos.antes) throw falha("Tire a foto antes.");
   if (F.acao === "resolvido_hora" && !F.fotos.depois) throw falha("Com “Resolvido na hora”, a foto depois é obrigatória.");
   if (F.acao === "encaminhado" && !dd.resp) throw falha("Informe para quem foi encaminhado.");
-  const aud = S.aud, set = F.setor, agora = nowISO(), resolv = F.acao === "resolvido_hora";
-  // reincidência: mesmo tipo + mesmo setor nos últimos 10 dias
+  const aud = S.aud, set = F.setor, agora = nowISO(), resolv = F.acao === "resolvido_hora", ref = F.ref;
+  if (ref && verifDe(ref.id)) throw falha(`${ref.numero} já foi conferida hoje.`);
+  // reincidência: mesmo tipo + mesmo setor nos últimos 10 dias (continuação não conta)
   const lim = addDias(S.hoje, -10);
-  const prev = (await getDocs(query(collection(db, "ocorrencias"), where("setor_id", "==", set.setor_id)))).docs.map(d => d.data())
+  const prev = ref ? null : (await getDocs(query(collection(db, "ocorrencias"), where("setor_id", "==", set.setor_id)))).docs.map(d => d.data())
     .filter(o => o.tipo_ocorrencia === dd.tipo && o.auditoria_data >= lim && o.status !== "cancelada")
     .sort((a, b) => b.numero_seq - a.numero_seq)[0];
+  const refRef = ref ? doc(db, "ocorrencias", ref.id) : null, vRef = ref ? doc(db, "verificacoes", `${S.hoje}_${ref.id}`) : null;
   const cRef = doc(db, "contadores", "ocorrencias"), audRef = doc(db, "auditorias", aud.id), setRef = doc(db, "auditoria_setores", set.id);
   const ocRef = doc(collection(db, "ocorrencias"));
   const fotoRefs = { antes: F.fotos.antes ? doc(collection(db, "fotos")) : null, depois: F.fotos.depois ? doc(collection(db, "fotos")) : null };
   let numero = "";
   await runTransaction(db, async tx => {
     const c = await tx.get(cRef), a = await tx.get(audRef), st = await tx.get(setRef);
+    const r = refRef ? await tx.get(refRef) : null, v = vRef ? await tx.get(vRef) : null;
     if (a.data()?.status !== "em_andamento") throw falha("Esta auditoria não está mais em andamento.");
     if (st.data()?.status === "concluido") throw falha("Este setor já foi concluído.");
+    if (ref && (!r.exists() || !["pendente", "parcialmente_resolvida"].includes(r.data().status))) throw falha(`${ref.numero} não está mais pendente.`);
+    if (v && v.exists()) throw falha(`${ref.numero} já foi conferida hoje.`);
     const seq = (c.exists() ? c.data().ultimo || 0 : 0) + 1;
     numero = "#" + String(seq).padStart(6, "0");
     for (const k of ["antes", "depois"]) if (fotoRefs[k])
@@ -635,7 +665,10 @@ async function salvarOcorrencia() {
       tipo_ocorrencia: dd.tipo, produto_codigo: dd.cod, produto_descricao: dd.pdesc, local: dd.local, descricao: dd.desc,
       gravidade: F.grav, foto_antes_id: fotoRefs.antes?.id || null, foto_depois_id: fotoRefs.depois?.id || null,
       acao_realizada: F.acao, responsavel: dd.resp, observacao: dd.obs,
-      status: resolv ? "resolvida" : "em_analise",
+      status: resolv ? "resolvida" : ref ? "pendente" : "em_analise",
+      ref_ocorrencia_id: ref?.id || null, ref_numero: ref?.numero || null, ref_data: ref?.auditoria_data || null,
+      origem_numero: ref ? (ref.origem_numero || ref.numero) : null, origem_data: ref ? (ref.origem_data || ref.auditoria_data) : null,
+      origem_registrado_em: ref ? (ref.origem_registrado_em || ref.registrado_em) : null,
       auditor_id: aud.colaborador_id, auditor_nome: aud.colaborador_nome, registrado_em: agora, registrado_por_uid: S.user.uid,
       reincidencia: !!prev, reincidencia_de: prev?.numero || null,
       data_resolucao: resolv ? agora : null, resolvido_por_nome: resolv ? aud.colaborador_nome : null,
@@ -643,11 +676,22 @@ async function salvarOcorrencia() {
       fotos_apagadas: false, criado_ts: serverTimestamp(),
     });
     tx.set(cRef, { ultimo: seq });
+    if (ref) {
+      const rd = r.data();
+      tx.set(vRef, {
+        ocorrencia_id: ref.id, ocorrencia_numero: ref.numero, ocorrencia_tipo: rd.tipo_ocorrencia, ocorrencia_setor: rd.setor_nome, ocorrencia_gravidade: rd.gravidade,
+        auditor_id: aud.colaborador_id, auditor_nome: aud.colaborador_nome, data_verificacao: agora, dia: S.hoje, auditoria_id: aud.id,
+        resultado: "continua_pendente", observacao: `Registrada de novo como ${numero}`, foto_id: fotoRefs.antes?.id || null,
+        nova_ocorrencia_id: ocRef.id, nova_ocorrencia_numero: numero, registrado_por_uid: S.user.uid, criado_ts: serverTimestamp(),
+      });
+      tx.update(refRef, { status: "substituida", substituida_por_id: ocRef.id, substituida_por_numero: numero, data_substituicao: agora,
+        ultima_verificacao_em: agora, ultima_verificacao_resultado: "continua_pendente", verificacoes_count: (rd.verificacoes_count || 0) + 1 });
+    }
     tx.update(audRef, { total_ocorrencias: (a.data().total_ocorrencias || 0) + 1 });
     tx.update(setRef, { ocorrencias_count: (st.data().ocorrencias_count || 0) + 1 });
   });
   fechar(); F = null;
-  toast(`Ocorrência ${numero} registrada` + (prev ? ` · reincidência de ${prev.numero}` : ""));
+  toast(`Ocorrência ${numero} registrada` + (ref ? ` · continuação de ${ref.numero}` : prev ? ` · reincidência de ${prev.numero}` : ""));
 }
 async function excluirOcorrencia(id) {
   const o = [...S.ocsHoje, ...S.emAnalise, ...(S.todasOcs || [])].find(x => x.id === id);
@@ -685,10 +729,10 @@ async function limparFotosAntigas() {
   limpezaFeita = true;
   const corte = addDias(S.hoje, -90);
   let n = 0;
-  for (const st of ["resolvida", "cancelada"]) {
+  for (const st of ["resolvida", "cancelada", "substituida"]) {
     const snap = await getDocs(query(collection(db, "ocorrencias"), where("status", "==", st), where("fotos_apagadas", "==", false)));
     for (const d of snap.docs) {
-      const o = d.data(), quando = String(o.data_resolucao || o.data_cancelamento || "").slice(0, 10);
+      const o = d.data(), quando = String(o.data_resolucao || o.data_cancelamento || o.data_substituicao || "").slice(0, 10);
       if (!quando || quando >= corte) continue;
       const b = writeBatch(db);
       FOTO_CAMPOS.forEach(k => { if (o[k]) b.delete(doc(db, "fotos", o[k])); });
@@ -710,6 +754,8 @@ function ocCard(o, extra = "") {
     <div class="s">${esc(o.descricao)}</div>
     <div class="s muted">${acaoTxt[o.acao_realizada] || ""}${o.responsavel ? " · Responsável: " + esc(o.responsavel) : ""} · Auditor: ${esc(o.auditor_nome)}</div>
     ${o.observacao ? `<div class="s muted">Obs.: ${esc(o.observacao)}</div>` : ""}
+    ${o.ref_numero ? `<div class="s"><span class="badge b-media">Continuação de ${esc(o.ref_numero)} de ${brData(o.ref_data)}</span>${o.origem_numero && o.origem_numero !== o.ref_numero ? ` <span class="s muted">origem ${esc(o.origem_numero)} de ${brData(o.origem_data)}</span>` : ""}</div>` : ""}
+    ${o.status === "substituida" ? `<div class="s muted">Continuou lá e foi registrada de novo como ${esc(o.substituida_por_numero)} em ${brData(String(o.data_substituicao).slice(0, 10))}</div>` : ""}
     ${o.verificacoes_count ? `<div class="s muted">Conferida ${o.verificacoes_count}x · última: ${verifTxt[o.ultima_verificacao_resultado] || ""} em ${brData(String(o.ultima_verificacao_em).slice(0, 10))}</div>` : ""}
     ${o.status === "resolvida" && o.resolvido_por_nome && o.acao_realizada !== "resolvido_hora" ? `<div class="s muted">Resolvida por ${esc(o.resolvido_por_nome)} em ${brData(String(o.data_resolucao).slice(0, 10))}${o.descricao_solucao ? ": " + esc(o.descricao_solucao) : ""}</div>` : ""}
     ${o.justificativa ? `<div class="s muted">Cancelada por ${esc(o.cancelado_por_nome)}: ${esc(o.justificativa)}</div>` : ""}
@@ -727,20 +773,30 @@ function slotFoto(v, rotulo) { return `<button type="button" class="fslot" data-
 function modalConferir(id) {
   const o = S.pendAbertas.find(x => x.id === id);
   if (!o) return;
+  if (S.aud?.status !== "em_andamento") return toast("Inicie a auditoria para conferir as pendências.");
+  const st = S.audSet.find(s => s.setor_id === o.setor_id);
+  if (st && (st.status === "concluido" || !setorLiberado(st.id))) return toast(`Confira dentro do setor ${st.setor_nome}, na ordem da ronda.`);
   const quem = S.aud?.colaborador_nome || S.atrib?.colaborador_nome;
   if (!quem) return toast("Sem auditor definido para hoje.");
   F = { tipoModal: "conf", oc: o, res: "", fotos: {} };
   abrirModal(`<h2>Conferir ${esc(o.numero)}</h2>
   <div class="auto">${esc(o.tipo_ocorrencia)} · ${esc(o.setor_nome)}${o.local ? " · " + esc(o.local) : ""}<br>${esc(o.descricao)}<br>Aberta em ${brData(o.auditoria_data)} · conferência por ${esc(quem)}, com data e hora automáticas</div>
-  <div class="field"><label>Resultado *</label><div class="chips">${Object.entries(verifTxt).map(([v, l]) => `<button type="button" data-act="chip" data-k="res" data-v="${v}">${l}</button>`).join("")}</div></div>
-  <div class="field"><label for="vObs">Observação</label><textarea id="vObs" rows="2" placeholder="O que foi visto no local"></textarea></div>
-  <div class="field"><label>Foto *</label><div class="row">${slotFoto("conf", "Tirar foto")}</div></div>
-  <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-conf">Registrar conferência</button></div>`);
+  <div class="field"><label>A ocorrência ainda está lá? *</label><div class="chips">
+    <button type="button" data-act="chip" data-k="res" data-v="resolvido">Resolvido</button>
+    <button type="button" data-act="chip" data-k="res" data-v="continua_pendente">Continua lá</button></div></div>
+  <div id="confResolvido" hidden>
+    <div class="field"><label for="vObs">Observação</label><textarea id="vObs" rows="2" placeholder="O que foi visto no local"></textarea></div>
+    <div class="field"><label>Foto *</label><div class="row">${slotFoto("conf", "Tirar foto")}</div></div>
+    <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-conf">Registrar como resolvida</button></div></div>
+  <div id="confContinua" hidden>
+    <div class="note">Vai abrir o registro de uma <b>ocorrência nova</b>, já preenchida, marcada como continuação de ${esc(o.numero)} de ${brData(o.auditoria_data)}. Tire uma foto nova e ajuste o que mudou. A ${esc(o.numero)} será encerrada como substituída.</div>
+    <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="continuar-oc">Registrar de novo</button></div></div>
+  <div id="confEscolha" class="row"><button class="btn" data-act="fechar">Cancelar</button></div>`);
 }
 async function salvarConferencia() {
   if (!F || F.tipoModal !== "conf") return;
   const o = F.oc, obs = $("#vObs").value.trim();
-  if (!F.res) throw falha("Escolha o resultado da conferência.");
+  if (F.res !== "resolvido") throw falha("Escolha o resultado da conferência.");
   if (!F.fotos.conf) throw falha("A foto da conferência é obrigatória.");
   const quemId = S.aud?.colaborador_id || S.atrib?.colaborador_id, quem = S.aud?.colaborador_nome || S.atrib?.colaborador_nome;
   const agora = nowISO(), vRef = doc(db, "verificacoes", `${S.hoje}_${o.id}`), oRef = doc(db, "ocorrencias", o.id), fRef = doc(collection(db, "fotos"));
@@ -758,9 +814,7 @@ async function salvarConferencia() {
       resultado: res, observacao: obs, foto_id: fRef.id, registrado_por_uid: S.user.uid, criado_ts: serverTimestamp(),
     });
     const upd = { ultima_verificacao_em: agora, ultima_verificacao_resultado: res, verificacoes_count: (od.verificacoes_count || 0) + 1 };
-    if (res === "resolvido") Object.assign(upd, { status: "resolvida", data_resolucao: agora, resolvido_por_nome: quem, resolvido_por_id: quemId, descricao_solucao: obs || "Resolvido (confirmado na conferência)", foto_solucao_id: fRef.id });
-    else if (res === "parcialmente_resolvido") upd.status = "parcialmente_resolvida";
-    else upd.status = "pendente";
+    Object.assign(upd, { status: "resolvida", data_resolucao: agora, resolvido_por_nome: quem, resolvido_por_id: quemId, descricao_solucao: obs || "Resolvido (confirmado na conferência)", foto_solucao_id: fRef.id });
     tx.update(oRef, upd);
   });
   fechar();
@@ -787,7 +841,7 @@ async function salvarResolucao() {
   await runTransaction(db, async tx => {
     const oc = await tx.get(oRef);
     if (!oc.exists()) throw falha("Ocorrência não encontrada.");
-    if (["resolvida", "cancelada"].includes(oc.data().status)) throw falha("Esta ocorrência já foi encerrada.");
+    if (["resolvida", "cancelada", "substituida"].includes(oc.data().status)) throw falha("Esta ocorrência já foi encerrada.");
     tx.set(fRef, { data: foto, tipo: "solucao", ocorrencia_id: o.id, ocorrencia_numero: o.numero, auditoria_id: null, criado_em: agora });
     tx.update(oRef, { status: "resolvida", data_resolucao: agora, resolvido_por_nome: nome, resolvido_por_uid: S.user.uid, descricao_solucao: desc, foto_solucao_id: fRef.id, resolvido_fora_da_ronda: true });
   });
@@ -799,8 +853,8 @@ async function carregarTodas() {
   S.todasOcs = (await getDocs(collection(db, "ocorrencias"))).docs.map(d => ({ id: d.id, ...d.data() }));
 }
 function diasAberto(o) {
-  const fim = o.status === "resolvida" ? String(o.data_resolucao).slice(0, 10) : o.status === "cancelada" ? String(o.data_cancelamento).slice(0, 10) : S.hoje;
-  return Math.max(0, Math.round((parseD(fim) - parseD(o.auditoria_data)) / 86400000));
+  const fim = o.status === "resolvida" ? String(o.data_resolucao).slice(0, 10) : o.status === "cancelada" ? String(o.data_cancelamento).slice(0, 10) : o.status === "substituida" ? String(o.data_substituicao).slice(0, 10) : S.hoje;
+  return Math.max(0, Math.round((parseD(fim) - parseD(o.origem_data || o.auditoria_data)) / 86400000));
 }
 
 /* ================= RELATÓRIO WORD ================= */
@@ -817,9 +871,9 @@ function montarRelatorio(D, dados) {
   const hr = s => s ? String(s).slice(11, 16) : "—";
   const dur = (a, b) => { if (!a || !b) return "—"; const m = Math.round((new Date(b) - new Date(a)) / 60000); return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`; };
   const GRAV = { baixa: ["Baixa", "DCE9F7", "2C6CB0"], media: ["Média", "FDF0D5", "8A5A12"], alta: ["Alta", "FBE1DE", "C0392B"], critica: ["Crítica", "F0DEF7", "7A1FA2"] };
-  const ST = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada" };
+  const ST = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada", substituida: "Substituída" };
   const ACAO = { resolvido_hora: "Resolvido na hora", encaminhado: "Encaminhado", nao_possivel: "Não foi possível" };
-  const VER = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua pendente" };
+  const VER = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua (registrada de novo)" };
   const SETST = { pendente: "Pendente", em_andamento: "Em andamento", concluido: "Concluído" };
   const AUDST = { em_andamento: "Em andamento", finalizada: "Finalizada", reiniciada: "Reiniciada" };
 
@@ -864,10 +918,10 @@ function montarRelatorio(D, dados) {
   const cont = k => novas.filter(k).length;
   const kVer = r => verificacoes.filter(v => v.resultado === r).length;
   const kpis = [
-    ["Ocorrências novas", novas.length], ["Resolvidas na hora", cont(o => o.acao_realizada === "resolvido_hora")],
-    ["Críticas ou altas", cont(o => o.gravidade === "critica" || o.gravidade === "alta")], ["Reincidências", cont(o => o.reincidencia)],
+    ["Ocorrências novas", cont(o => !o.ref_ocorrencia_id)], ["Continuações (registradas de novo)", cont(o => !!o.ref_ocorrencia_id)],
+    ["Resolvidas na hora", cont(o => o.acao_realizada === "resolvido_hora")], ["Críticas ou altas", cont(o => !o.ref_ocorrencia_id && (o.gravidade === "critica" || o.gravidade === "alta"))],
     ["Pendências conferidas", verificacoes.length], ["Resolvidas na conferência", kVer("resolvido")],
-    ["Parcialmente resolvidas", kVer("parcialmente_resolvido")], ["Continuam pendentes", kVer("continua_pendente")],
+    ["Continuam lá", kVer("continua_pendente") + kVer("parcialmente_resolvido")], ["Reincidências", cont(o => o.reincidencia)],
   ];
   const kw = W / 4;
   const kpiRow = arr => new TableRow({ children: arr.map(([l, v]) => cel([p([t(v, { bold: true, size: 32, color: NAVY })], { after: 0 }), p([t(l, { size: 16, color: CINZA })], { after: 0 })], kw, { fill: FUNDO, borders: bordas("FFFFFF") })) });
@@ -908,6 +962,7 @@ function montarRelatorio(D, dados) {
     campo("Responsável", o.responsavel);
     campo("Observação", o.observacao);
     campo("Registrada às", hr(o.registrado_em));
+    if (o.ref_numero) campo("Continuação de", `${o.ref_numero} de ${br(o.ref_data)}${o.origem_numero && o.origem_numero !== o.ref_numero ? ` (origem ${o.origem_numero} de ${br(o.origem_data)})` : ""}`, "B7791F");
     if (o.reincidencia) campo("Reincidência", `mesmo tipo e setor que ${o.reincidencia_de} (últimos 10 dias)`, "C0392B");
     if (o.status === "resolvida" && o.acao_realizada !== "resolvido_hora") campo("Solução", `${o.descricao_solucao || ""} (${o.resolvido_por_nome || ""}, ${br(o.data_resolucao)})`);
     if (o.status === "cancelada") campo("Cancelamento", `${o.justificativa || ""} (${o.cancelado_por_nome || ""})`);
@@ -936,7 +991,7 @@ function montarRelatorio(D, dados) {
       ...verificacoes.map((v, i) => new TableRow({ cantSplit: true, children: [
         cel(p([t(v.ocorrencia_numero, { bold: true })], { after: 0 }), vw[0]),
         cel([p([t(v.ocorrencia_tipo || "")], { after: 0 }), p([t(v.ocorrencia_setor || "", { size: 16, color: CINZA })], { after: 0 })], vw[1]),
-        cel(p([t(VER[v.resultado] || v.resultado, { bold: true, color: v.resultado === "resolvido" ? "1E8E5A" : v.resultado === "parcialmente_resolvido" ? "8A5A12" : "C0392B" })], { after: 0 }), vw[2]),
+        cel(p([t((VER[v.resultado] || v.resultado) + (v.nova_ocorrencia_numero ? " → " + v.nova_ocorrencia_numero : ""), { bold: true, color: v.resultado === "resolvido" ? "1E8E5A" : v.resultado === "parcialmente_resolvido" ? "8A5A12" : "C0392B" })], { after: 0 }), vw[2]),
         cel(p([t(hr(v.data_verificacao))], { after: 0 }), vw[3]),
         cel([...(v.observacao ? [p([t(v.observacao, { size: 18 })], { after: 40 })] : []), ...(fotos[v.foto_id] ? [p([img(fotos[v.foto_id], 190, 120)], { after: 0 })] : [])], vw[4], { v: VerticalAlign.TOP }),
       ] })),
@@ -1024,6 +1079,222 @@ async function gerarRelatorioDocx(audId) {
   toast("Relatório Word baixado");
 }
 
+/* Relatório semanal — dados = { cfg, logo, seg, sex, hoje, dias:[{data, atrib, auds:[]}], ocs, verifs, abertas, fotos, geradoEm } */
+function montarRelatorioSemanal(D, dados) {
+  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, AlignmentType,
+    ImageRun, Header, Footer, PageNumber, VerticalAlign, TableLayoutType, PageBreak } = D;
+  const { cfg, logo, seg, sex, hoje, dias, ocs, verifs, abertas, fotos, geradoEm } = dados;
+  const refFim = sex < hoje ? sex : hoje;
+  const NAVY = "1F2A44", AMARELO = "F2B705", CINZA = "5E6A7D", LINHA = "D8DEE7", FUNDO = "F3F5F8";
+  const W = 10206, FONTE = "Arial";
+  const br = s => s ? String(s).slice(0, 10).split("-").reverse().join("/") : "—";
+  const hr = s => s ? String(s).slice(11, 16) : "—";
+  const min = a => (a.horario_inicio && a.horario_finalizacao) ? (new Date(a.horario_finalizacao) - new Date(a.horario_inicio)) / 60000 : null;
+  const hm = m => m == null ? "—" : `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const num1 = v => v == null ? "—" : v.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+  const pct = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
+  const diasEntre = (a, b) => Math.max(0, Math.round((new Date(String(b).slice(0, 10) + "T12:00:00Z") - new Date(String(a).slice(0, 10) + "T12:00:00Z")) / 86400000));
+  const DSEM = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+  const dsem = s => DSEM[new Date(s + "T12:00:00Z").getUTCDay()];
+  const GRAV = { baixa: ["Baixa", "DCE9F7", "2C6CB0"], media: ["Média", "FDF0D5", "8A5A12"], alta: ["Alta", "FBE1DE", "C0392B"], critica: ["Crítica", "F0DEF7", "7A1FA2"] };
+  const ST = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada", substituida: "Substituída" };
+  const ACAO = { resolvido_hora: "Resolvido na hora", encaminhado: "Encaminhado", nao_possivel: "Não foi possível" };
+  const VER = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua (registrada de novo)" };
+
+  const t = (text, o = {}) => new TextRun({ text: String(text ?? ""), font: FONTE, size: o.size || 20, bold: o.bold, color: o.color, italics: o.italics });
+  const p = (runs, o = {}) => new Paragraph({ children: Array.isArray(runs) ? runs : [runs], spacing: { before: o.before ?? 0, after: o.after ?? 80 }, alignment: o.align, keepNext: o.keepNext, border: o.border });
+  const nada = { style: BorderStyle.NONE, size: 0, color: "FFFFFF" };
+  const semBorda = { top: nada, bottom: nada, left: nada, right: nada };
+  const semBordaTab = { ...semBorda, insideHorizontal: nada, insideVertical: nada };
+  const bordas = c => { const b = { style: BorderStyle.SINGLE, size: 4, color: c || LINHA }; return { top: b, bottom: b, left: b, right: b }; };
+  const cel = (children, w, o = {}) => new TableCell({ children: Array.isArray(children) ? children : [children], width: { size: w, type: WidthType.DXA },
+    shading: o.fill ? { type: ShadingType.CLEAR, color: "auto", fill: o.fill } : undefined, borders: o.borders || bordas(),
+    margins: { top: 50, bottom: 50, left: 90, right: 90 }, verticalAlign: o.v || VerticalAlign.CENTER, columnSpan: o.span });
+  const tabela = (ws, rows, o = {}) => new Table({ width: { size: ws.reduce((a, b) => a + b, 0), type: WidthType.DXA }, columnWidths: ws, rows, layout: TableLayoutType.FIXED, borders: o.borders });
+  const titulo = x => p([t(x.toUpperCase(), { bold: true, size: 22, color: NAVY })], { before: 280, after: 120, keepNext: true, border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: AMARELO, space: 4 } } });
+  const img = (f, mw, mh) => { if (!f) return null; const k = Math.min(mw / f.w, mh / f.h); return new ImageRun({ type: f.type, data: f.bytes, transformation: { width: Math.round(f.w * k), height: Math.round(f.h * k) } }); };
+  const th = (x, w) => cel(p([t(x, { bold: true, size: 17, color: "FFFFFF" })], { after: 0, keepNext: true }), w, { fill: NAVY, borders: bordas(NAVY) });
+  const td = (x, w, o = {}) => cel(p([t(x, { size: o.size || 18, bold: o.bold, color: o.color })], { after: 0, align: o.align }), w, { fill: o.fill });
+  const tabelaDados = (cols, linhas, vazio) => {
+    if (!linhas.length) return [p([t(vazio, { italics: true, color: CINZA })])];
+    const ws = cols.map(c => c[1]);
+    return [tabela(ws, [new TableRow({ tableHeader: true, children: cols.map(([n, w]) => th(n, w)) }),
+      ...linhas.map((l, i) => new TableRow({ cantSplit: true, children: l.map((v, j) => (v instanceof TableCell) ? v : td(v, ws[j], { fill: i % 2 ? FUNDO : undefined })) }))])];
+  };
+
+  /* ---------- cálculos ---------- */
+  const auds = dias.flatMap(d => d.auds);
+  const fin = auds.filter(a => a.status === "finalizada");
+  const diasFin = new Set(fin.map(a => a.data));
+  const passados = dias.filter(d => d.data <= hoje);
+  const emAndamento = sex >= hoje && !(diasFin.has(sex));
+  const todasVal = ocs.filter(o => o.status !== "cancelada");
+  const validas = todasVal.filter(o => !o.ref_ocorrencia_id);
+  const continuacoes = todasVal.length - validas.length;
+  const pontas = todasVal.filter(o => o.status !== "substituida");
+  const resolvidas = pontas.filter(o => o.status === "resolvida");
+  const naHora = validas.filter(o => o.acao_realizada === "resolvido_hora");
+  const tempoRes = avg(resolvidas.filter(o => o.acao_realizada !== "resolvido_hora" && o.data_resolucao && (o.origem_registrado_em || o.registrado_em)).map(o => (new Date(o.data_resolucao) - new Date(o.origem_registrado_em || o.registrado_em)) / 86400000));
+  const graves = validas.filter(o => o.gravidade === "critica" || o.gravidade === "alta");
+  const conta = (arr, fn) => { const m = {}; arr.forEach(x => { const k = fn(x); if (k) m[k] = (m[k] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]); };
+
+  /* ---------- cabeçalho / rodapé ---------- */
+  const header = new Header({ children: [tabela([2600, W - 2600], [new TableRow({ children: [
+    cel(p(logo ? [img(logo, 150, 48)] : [t(cfg.empresa_nome || "", { bold: true, size: 24, color: NAVY })], { after: 0 }), 2600, { borders: semBorda }),
+    cel([p([t(cfg.empresa_nome || "", { bold: true, size: 22, color: NAVY })], { align: AlignmentType.RIGHT, after: 0 }),
+      p([t("Relatório semanal de auditoria operacional", { size: 16, color: CINZA })], { align: AlignmentType.RIGHT, after: 0 })], W - 2600, { borders: semBorda })] })], { borders: semBordaTab }),
+    p([t("")], { after: 0, border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 2 } } })] });
+  const cz = { size: 16, color: CINZA };
+  const footer = new Footer({ children: [p([t(`Semana de ${br(seg)} a ${br(sex)} · gerado em ${br(geradoEm)} às ${hr(geradoEm)}    Página `, cz),
+    new TextRun({ children: [PageNumber.CURRENT], font: FONTE, ...cz }), t(" de ", cz), new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONTE, ...cz })], { align: AlignmentType.CENTER, after: 0 })] });
+
+  const c = [];
+  c.push(p([t("Relatório semanal de auditoria operacional", { bold: true, size: 36, color: NAVY })], { before: 120, after: 40 }));
+  c.push(p([t(`Semana de ${br(seg)} a ${br(sex)}`, { size: 22, color: CINZA })], { after: emAndamento ? 60 : 200 }));
+  if (emAndamento) c.push(p([t("Relatório parcial: a semana ainda está em andamento.", { bold: true, size: 18, color: "C0392B" })], { after: 200 }));
+
+  /* ---------- resumo ---------- */
+  c.push(titulo("Resumo da semana"));
+  const kw = W / 4;
+  const kpi = arr => new TableRow({ children: arr.map(([l, v, alerta]) => cel([p([t(v, { bold: true, size: 30, color: alerta ? "C0392B" : NAVY })], { after: 0 }), p([t(l, { size: 15, color: CINZA })], { after: 0 })], kw, { fill: FUNDO, borders: bordas("FFFFFF") })) });
+  const naoFeitas = passados.filter(d => d.data < hoje && !diasFin.has(d.data)).length;
+  c.push(tabela([kw, kw, kw, kw], [
+    kpi([["Rondas realizadas", `${fin.length} de ${dias.length}`, naoFeitas > 0], ["Dias sem ronda (já passados)", naoFeitas, naoFeitas > 0], ["Duração média da ronda", hm(avg(fin.map(min).filter(x => x != null)))], ["Pendências conferidas", verifs.length]]),
+    kpi([["Ocorrências encontradas", validas.length], ["Resolvidas até agora", `${resolvidas.length} (${pct(resolvidas.length, pontas.length)})`], ["Resolvidas na hora", naHora.length], ["Tempo médio de resolução", tempoRes == null ? "—" : num1(tempoRes) + " d"]]),
+    kpi([["Críticas ou altas", graves.length, graves.length > 0], ["Reincidências", validas.filter(o => o.reincidencia).length, validas.some(o => o.reincidencia)], ["Continuações", continuacoes], ["Abertas para a próxima semana", abertas.length, abertas.some(o => o.gravidade === "critica")]]),
+  ]));
+
+  /* ---------- dia a dia ---------- */
+  c.push(titulo("Dia a dia"));
+  const dcols = [["Dia", 1500], ["Auditor", 2106], ["Situação", 1500], ["Horário", 1400], ["Duração", 1000], ["Ocorrências", 1300], ["Conferências", 1400]];
+  c.push(...tabelaDados(dcols, dias.map(d => {
+    const a = d.auds.find(x => x.status === "finalizada") || d.auds.find(x => x.status === "em_andamento") || d.auds[0];
+    const sit = a ? ({ finalizada: "Finalizada", em_andamento: "Em andamento", reiniciada: "Reiniciada" }[a.status]) : d.data < hoje ? "Não realizada" : d.data === hoje ? "Não iniciada" : "Programada";
+    const cor = !a && d.data < hoje ? "C0392B" : a?.status === "finalizada" ? "1E8E5A" : undefined;
+    const reinicios = d.auds.filter(x => x.status === "reiniciada").length;
+    return [`${dsem(d.data).slice(0, 3)} ${br(d.data).slice(0, 5)}`, a?.colaborador_nome || d.atrib?.colaborador_nome || "—",
+      td(sit + (reinicios && a?.status !== "reiniciada" ? ` (+${reinicios} reinício)` : ""), dcols[2][1], { bold: true, color: cor }),
+      a ? `${hr(a.horario_inicio)}–${hr(a.horario_finalizacao)}` : "—", hm(a ? min(a) : null),
+      String(validas.filter(o => o.auditoria_data === d.data).length), String(verifs.filter(v => v.dia === d.data).length)];
+  }), ""));
+  const obs = dias.map(d => [d, d.auds.find(x => x.status === "finalizada")]).filter(([, a]) => a && a.observacao_final);
+  if (obs.length) {
+    c.push(p([t("Observações dos auditores", { bold: true, size: 19, color: NAVY })], { before: 160, after: 60, keepNext: true }));
+    obs.forEach(([d, a]) => c.push(p([t(`${dsem(d.data)} (${a.colaborador_nome}): `, { bold: true, size: 18 }), t(a.observacao_final, { size: 18 })], { after: 50 })));
+  }
+
+  /* ---------- rankings ---------- */
+  c.push(titulo("Rankings da semana"));
+  const setores = [...new Set(validas.map(o => o.setor_nome))].map(n => { const l = validas.filter(o => o.setor_nome === n); return [n, l.length, l.filter(o => o.gravidade === "critica" || o.gravidade === "alta").length, pontas.filter(o => o.setor_nome === n && o.status === "resolvida").length]; })
+    .sort((a, b) => b[1] - a[1] || b[2] - a[2]);
+  c.push(p([t("Setores", { bold: true, size: 19, color: NAVY })], { after: 60, keepNext: true }));
+  c.push(...tabelaDados([["Setor", 4206], ["Ocorrências", 2000], ["Críticas/altas", 2000], ["Resolvidas", 2000]], setores.map(([n, q, g, r]) => [n, String(q), String(g), String(r)]), "Nenhuma ocorrência na semana."));
+  const meia = [W / 2 - 100, 200, W / 2 - 100];
+  const mini = (tit, linhas) => [p([t(tit, { bold: true, size: 19, color: NAVY })], { after: 60, keepNext: true }),
+    ...(linhas.length ? [tabela([3903, 1100], linhas.map(([l, v], i) => new TableRow({ children: [td(l, 3903, { fill: i % 2 ? FUNDO : undefined }), td(String(v), 1100, { fill: i % 2 ? FUNDO : undefined, align: AlignmentType.RIGHT, bold: true })] })))] : [p([t("—", { color: CINZA })])])];
+  c.push(p([t("")], { after: 80 }));
+  c.push(tabela(meia, [new TableRow({ children: [
+    cel(mini("Por tipo", conta(validas, o => o.tipo_ocorrencia)), meia[0], { borders: semBorda, v: VerticalAlign.TOP }), cel(p([t("")]), meia[1], { borders: semBorda }),
+    cel(mini("Por gravidade", ["critica", "alta", "media", "baixa"].map(g => [GRAV[g][0], validas.filter(o => o.gravidade === g).length]).filter(x => x[1])), meia[2], { borders: semBorda, v: VerticalAlign.TOP })] })], { borders: semBordaTab }));
+  const nomes = [...new Set([...fin.map(a => a.colaborador_nome), ...validas.map(o => o.auditor_nome), ...verifs.map(v => v.auditor_nome)])].filter(Boolean).sort();
+  c.push(p([t("Auditores", { bold: true, size: 19, color: NAVY })], { before: 160, after: 60, keepNext: true }));
+  c.push(...tabelaDados([["Auditor", 3606], ["Rondas", 1500], ["Ocorrências", 1700], ["Conferências", 1700], ["Duração média", 1700]],
+    nomes.map(n => { const f = fin.filter(a => a.colaborador_nome === n); return [n, String(f.length), String(validas.filter(o => o.auditor_nome === n).length), String(verifs.filter(v => v.auditor_nome === n).length), hm(avg(f.map(min).filter(x => x != null)))]; }), "Sem rondas na semana."));
+  const vr = conta(verifs, v => VER[v.resultado]);
+  if (vr.length) c.push(p([t("Conferências de pendências: ", { bold: true, size: 18 }), t(vr.map(([l, v]) => `${v} ${l.toLowerCase()}`).join(" · "), { size: 18 })], { before: 120 }));
+
+  /* ---------- pendências para a próxima semana ---------- */
+  c.push(titulo(`Pendências para a próxima semana (${abertas.length})`));
+  c.push(p([t(`Ocorrências que estavam abertas no fim da semana (${br(refFim)}), incluindo as de semanas anteriores. "Dias" conta até ${br(refFim)}.`, { size: 16, color: CINZA })], { after: 80, keepNext: true }));
+  c.push(...tabelaDados([["Nº", 950], ["Aberta em", 1050], ["Dias", 600], ["Setor", 1700], ["Tipo", 1900], ["Gravidade", 1150], ["Status hoje", 1400], ["Responsável", 1456]],
+    [...abertas].sort((a, b) => String(a.auditoria_data).localeCompare(String(b.auditoria_data)) || a.numero_seq - b.numero_seq).map(o => {
+      const g = GRAV[o.gravidade] || GRAV.media;
+      return [o.numero, br(o.auditoria_data).slice(0, 5), String(diasEntre(o.origem_data || o.auditoria_data, refFim)), o.setor_nome, o.tipo_ocorrencia, td(g[0], 1150, { fill: g[1], color: g[2], bold: true }), ST[o.status], o.responsavel || "—"];
+    }), "Nenhuma pendência aberta. Semana fechada sem pendências."));
+
+  /* ---------- ocorrências da semana ---------- */
+  c.push(titulo(`Ocorrências da semana (${ocs.length})`));
+  const ordenadas = [...ocs].sort((a, b) => a.numero_seq - b.numero_seq);
+  c.push(...tabelaDados([["Nº", 1000], ["Dia", 1000], ["Setor", 2000], ["Tipo", 2206], ["Gravidade", 1100], ["Status atual", 1600], ["Ação", 1300]],
+    ordenadas.map(o => { const g = GRAV[o.gravidade] || GRAV.media; return [o.numero, br(o.auditoria_data).slice(0, 5), o.setor_nome, o.tipo_ocorrencia, td(g[0], 1100, { fill: g[1], color: g[2], bold: true }), ST[o.status], ACAO[o.acao_realizada] || ""]; }), "Nenhuma ocorrência registrada na semana."));
+  if (ordenadas.length) {
+    c.push(p([new PageBreak()], { after: 0 }));
+    c.push(titulo("Detalhes e fotos das ocorrências"));
+  }
+  ordenadas.forEach(o => {
+    const g = GRAV[o.gravidade] || GRAV.media, det = [];
+    const campo = (l, v, cor) => { if (v) det.push(p([t(l + ": ", { bold: true, size: 17, color: cor || CINZA }), t(v, { size: 17, bold: !!cor, color: cor })], { after: 30, keepNext: true })); };
+    campo("Dia", `${dsem(o.auditoria_data)}, ${br(o.auditoria_data)} às ${hr(o.registrado_em)} · auditor ${o.auditor_nome || ""}`);
+    campo("Produto", [o.produto_codigo, o.produto_descricao].filter(Boolean).join(" · "));
+    campo("Local", o.local);
+    campo("Descrição", o.descricao);
+    campo("Ação", [ACAO[o.acao_realizada], o.responsavel ? "responsável " + o.responsavel : ""].filter(Boolean).join(" · "));
+    campo("Observação", o.observacao);
+    if (o.ref_numero) campo("Continuação de", `${o.ref_numero} de ${br(o.ref_data)}`, "B7791F");
+    if (o.status === "substituida") campo("Continuou lá", `registrada de novo como ${o.substituida_por_numero} em ${br(o.data_substituicao)}`, "B7791F");
+    if (o.reincidencia) campo("Reincidência", `mesmo tipo e setor que ${o.reincidencia_de}`, "C0392B");
+    if (o.status === "resolvida" && o.acao_realizada !== "resolvido_hora") campo("Solução", `${o.descricao_solucao || ""} (${o.resolvido_por_nome || ""}, ${br(o.data_resolucao)})`);
+    if (o.status === "cancelada") campo("Cancelamento", `${o.justificativa || ""} (${o.cancelado_por_nome || ""})`);
+    if (o.verificacoes_count) campo("Conferências", `${o.verificacoes_count}x, última: ${VER[o.ultima_verificacao_resultado] || ""} em ${br(o.ultima_verificacao_em)}`);
+    const fs = o.fotos_apagadas ? [] : [["Antes", o.foto_antes_id], ["Depois", o.foto_depois_id], ["Solução", o.foto_solucao_id]].filter(([, id]) => id && fotos[id]);
+    const rows = [
+      new TableRow({ cantSplit: true, children: [cel(p([t(`${o.numero}  `, { bold: true, size: 20, color: "FFFFFF" }), t(`${o.tipo_ocorrencia} · ${o.setor_nome}`, { bold: true, size: 18, color: "FFFFFF" })], { after: 0, keepNext: true }), W - 3000, { fill: NAVY, borders: bordas(NAVY) }),
+        cel(p([t(`${g[0]} · ${ST[o.status] || o.status}`, { bold: true, size: 17, color: g[2] })], { after: 0, align: AlignmentType.RIGHT, keepNext: true }), 3000, { fill: g[1], borders: bordas(NAVY) })] }),
+      new TableRow({ cantSplit: true, children: [cel(det.length ? det : [p([t("")], { keepNext: true })], W, { span: 2, v: VerticalAlign.TOP })] }),
+    ];
+    if (fs.length) {
+      const cw = Math.floor(W / 3);
+      rows.push(new TableRow({ cantSplit: true, children: [cel([tabela(fs.map(() => cw), [new TableRow({ children: fs.map(([l, id]) => cel([p([img(fotos[id], 180, 135)], { after: 10, align: AlignmentType.CENTER }), p([t(l, { size: 15, color: CINZA })], { after: 0, align: AlignmentType.CENTER })], cw, { borders: semBorda })) })], { borders: semBordaTab })], W, { span: 2 })] }));
+    } else if (o.fotos_apagadas) rows.push(new TableRow({ children: [cel(p([t("Fotos removidas após 90 dias da resolução.", { italics: true, size: 15, color: CINZA })], { after: 0 }), W, { span: 2 })] }));
+    c.push(tabela([W - 3000, 3000], rows));
+    c.push(p([t("")], { after: 100 }));
+  });
+
+  c.push(p([t("")], { before: 300 }));
+  const ass = x => cel([p([t("")], { before: 600, after: 0, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: NAVY, space: 2 } } }), p([t(x, { size: 18, color: CINZA })], { align: AlignmentType.CENTER, after: 0 })], 4603, { borders: semBorda });
+  c.push(tabela([4603, 1000, 4603], [new TableRow({ cantSplit: true, children: [ass("Líder responsável"), cel(p([t("")]), 1000, { borders: semBorda }), ass("Gerência")] })], { borders: semBordaTab }));
+
+  return new Document({ creator: cfg.empresa_nome || "Auditoria Operacional", title: `Semana ${br(seg)} a ${br(sex)}`,
+    styles: { default: { document: { run: { font: FONTE, size: 20 } } } },
+    sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1300, bottom: 1000, left: 850, right: 850, header: 450, footer: 450 } } }, headers: { default: header }, footers: { default: footer }, children: c }] });
+}
+
+async function gerarRelatorioSemanal(seg) {
+  const sex = addDias(seg, 4);
+  toast("Montando relatório da semana…");
+  const [D, auds, atS, ocS, vS, abS] = await Promise.all([
+    carregarDocx(), audsEntre(seg, sex),
+    getDocs(query(collection(db, "atribuicoes"), where("data", ">=", seg), where("data", "<=", sex))),
+    getDocs(query(collection(db, "ocorrencias"), where("auditoria_data", ">=", seg), where("auditoria_data", "<=", sex))),
+    getDocs(query(collection(db, "verificacoes"), where("dia", ">=", seg), where("dia", "<=", sex))),
+    getDocs(query(collection(db, "ocorrencias"), where("auditoria_data", "<=", sex))),
+  ]);
+  const atrib = {}; atS.docs.forEach(d => atrib[d.id] = d.data());
+  const dias = [0, 1, 2, 3, 4].map(i => { const data = addDias(seg, i); return { data, atrib: atrib[data] || null, auds: auds.filter(a => a.data === data).sort((a, b) => String(a.horario_inicio).localeCompare(String(b.horario_inicio))) }; });
+  const ocs = ocS.docs.map(d => d.data());
+  const verifs = vS.docs.map(d => d.data());
+  // abertas no fim da semana: criadas até sexta e não encerradas até lá
+  const fimRef = sex < S.hoje ? sex : S.hoje;
+  const abertas = abS.docs.map(d => d.data()).filter(o => {
+    if (["em_analise", "pendente", "parcialmente_resolvida"].includes(o.status)) return true;
+    const enc = String(o.status === "resolvida" ? o.data_resolucao : o.status === "cancelada" ? o.data_cancelamento : o.status === "substituida" ? o.data_substituicao : "").slice(0, 10);
+    return !!enc && enc > fimRef;
+  });
+  const ids = new Set();
+  ocs.forEach(o => { if (!o.fotos_apagadas) FOTO_CAMPOS.forEach(k => o[k] && ids.add(o[k])); });
+  if (ids.size > 150 && !confirm(`A semana tem ${ids.size} fotos. O arquivo vai ficar pesado e pode demorar. Continuar?`)) return;
+  const fotos = {};
+  await Promise.all([...ids].map(async id => { const f = await imgDeDataURL(await carregarFoto(id)); if (f) fotos[id] = f; }));
+  const logoUrl = S.logo === undefined ? await carregarLogo() : S.logo;
+  const documento = montarRelatorioSemanal(D, {
+    cfg: { empresa_nome: S.config.empresa_nome ?? "Lojas MM · CDAM" }, logo: await imgDeDataURL(logoUrl || LOGO_PADRAO()),
+    seg, sex, hoje: S.hoje, dias, ocs, verifs, abertas, fotos, geradoEm: nowISO(),
+  });
+  baixarArquivo(await D.Packer.toBlob(documento), `Semana_${seg}_a_${sex}.docx`);
+  toast("Relatório da semana baixado");
+}
+
 /* ================= CSV ================= */
 function exportarCsv(ocs, nome) {
   if (!ocs.length) throw falha("Nenhuma ocorrência para exportar.");
@@ -1031,9 +1302,9 @@ function exportarCsv(ocs, nome) {
     ["Gravidade", o => gravTxt[o.gravidade]], ["Status", o => ocStTxt[o.status]], ["Ação", o => acaoTxt[o.acao_realizada]], ["Responsável", o => o.responsavel],
     ["Código produto", o => o.produto_codigo], ["Descrição produto", o => o.produto_descricao], ["Local", o => o.local], ["Descrição", o => o.descricao], ["Observação", o => o.observacao],
     ["Registrada em", o => o.registrado_em ? brData(o.registrado_em.slice(0, 10)) + " " + horaDe(o.registrado_em) : ""],
-    ["Encerrada em", o => { const x = o.data_resolucao || o.data_cancelamento; return x ? brData(x.slice(0, 10)) + " " + horaDe(x) : ""; }],
+    ["Encerrada em", o => { const x = o.data_resolucao || o.data_cancelamento || o.data_substituicao; return x ? brData(x.slice(0, 10)) + " " + horaDe(x) : ""; }],
     ["Dias em aberto", o => diasAberto(o)], ["Reincidência", o => o.reincidencia ? "Sim (" + o.reincidencia_de + ")" : "Não"],
-    ["Conferências", o => o.verificacoes_count || 0], ["Resolvida por", o => o.resolvido_por_nome], ["Solução", o => o.descricao_solucao], ["Justificativa cancelamento", o => o.justificativa]];
+    ["Conferências", o => o.verificacoes_count || 0], ["Continuação de", o => o.ref_numero ? `${o.ref_numero} (${brData(o.ref_data)})` : ""], ["Registrada de novo como", o => o.substituida_por_numero || ""], ["Resolvida por", o => o.resolvido_por_nome], ["Solução", o => o.descricao_solucao], ["Justificativa cancelamento", o => o.justificativa]];
   const q = v => `"${String(v ?? "").replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
   const linhas = [cols.map(c => q(c[0])).join(";"), ...ocs.sort((a, b) => a.numero_seq - b.numero_seq).map(o => cols.map(c => q(c[1](o))).join(";"))];
   baixarArquivo(new Blob(["\ufeff" + linhas.join("\r\n")], { type: "text/csv;charset=utf-8" }), nome);
@@ -1118,7 +1389,7 @@ async function carregarInd() {
 const media = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
 const fmt1 = v => v == null ? "—" : v.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 const pct = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
-const diasResol = o => (new Date(o.data_resolucao) - new Date(o.registrado_em)) / 86400000;
+const diasResol = o => (new Date(o.data_resolucao) - new Date(o.origem_registrado_em || o.registrado_em)) / 86400000;
 const minutos = a => (new Date(a.horario_finalizacao) - new Date(a.horario_inicio)) / 60000;
 const hm = m => m == null ? "—" : `${Math.floor(m / 60)}h${pad(Math.round(m % 60))}`;
 function barras(pares, cor) {
@@ -1132,16 +1403,22 @@ function tabInd() {
   const per = [["7", "7 dias"], ["30", "30 dias"], ["90", "90 dias"], ["mes", "Este mês"], ["custom", "Personalizado"]];
   const ctrl = `<div class="row" style="margin-bottom:12px"><div class="chips">${per.map(([v, l]) => `<button data-act="ind-per" data-v="${v}" class="${i.per === v ? "on" : ""}">${l}</button>`).join("")}</div>
     ${i.per === "custom" ? `<div class="row"><input type="date" data-ind="ini" value="${i.ini}" aria-label="Início" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"><span>até</span><input type="date" data-ind="fim" value="${i.fim}" aria-label="Fim" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"></div>` : ""}</div>`;
-  if (!D) return ctrl + `<div class="panel">Carregando indicadores…</div>`;
+  const semSex = addDias(i.sem, 4), atual = i.sem === segundaDe(S.hoje);
+  const semanal = `<div class="panel semanal"><div class="row"><div><h2 style="margin:0">Relatório da semana</h2><p class="muted" style="margin:2px 0 0;font-size:14px">Word com resumo, dia a dia, rankings, pendências e todas as ocorrências com fotos. Na sexta, baixa sozinho ao finalizar a ronda.</p></div></div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="sem-nav" data-v="-7" aria-label="Semana anterior">‹</button><b class="cond" style="font-size:18px">${brData(i.sem)} a ${brData(semSex)}</b><button class="btn sm" data-act="sem-nav" data-v="7" ${atual ? "disabled" : ""} aria-label="Próxima semana">›</button>${atual ? `<span class="badge b-pend">Semana atual</span>` : ""}<button class="btn sm dark sp" data-act="sem-docx">Baixar relatório da semana</button></div></div>`;
+  if (!D) return ctrl + semanal + `<div class="panel">Carregando indicadores…</div>`;
   const { auds, ocs, verifs, abertas, resolvidasPer, ini, fim } = D;
   const fin = auds.filter(a => a.status === "finalizada");
   const diasFin = new Set(fin.map(a => a.data));
   let uteis = 0, naoFeitas = 0;
   for (let d = ini; d <= fim && d <= S.hoje; d = addDias(d, 1)) if (diasUteis(d)) { uteis++; if (!diasFin.has(d) && d < S.hoje) naoFeitas++; }
-  const validas = ocs.filter(o => o.status !== "cancelada");
-  const resolvidas = validas.filter(o => o.status === "resolvida");
+  const todasVal = ocs.filter(o => o.status !== "cancelada");
+  const validas = todasVal.filter(o => !o.ref_ocorrencia_id); // ocorrências novas (continuação não conta)
+  const continuacoes = todasVal.length - validas.length;
+  const pontas = todasVal.filter(o => o.status !== "substituida"); // cada problema conta uma vez
+  const resolvidas = pontas.filter(o => o.status === "resolvida");
   const naHora = validas.filter(o => o.acao_realizada === "resolvido_hora");
-  const tempoRes = media(resolvidasPer.filter(o => o.acao_realizada !== "resolvido_hora" && o.registrado_em).map(diasResol));
+  const tempoRes = media(resolvidasPer.filter(o => o.acao_realizada !== "resolvido_hora" && (o.origem_registrado_em || o.registrado_em)).map(diasResol));
   const criticasAb = abertas.filter(o => o.gravidade === "critica");
   const velhas = abertas.filter(o => diasAberto(o) > 7);
   const kpi = (v, l, sub, alerta) => `<div class="kpi ${alerta ? "alerta" : ""}"><b>${v}</b><span>${l}</span>${sub ? `<small>${sub}</small>` : ""}</div>`;
@@ -1149,8 +1426,8 @@ function tabInd() {
     ${kpi(fin.length, "Auditorias realizadas", `${uteis} dia(s) útil(eis) · ${pct(fin.length, uteis)}`)}
     ${kpi(naoFeitas, "Dias sem auditoria", auds.some(a => a.status === "reiniciada") ? `${auds.filter(a => a.status === "reiniciada").length} reinício(s)` : "", naoFeitas > 0)}
     ${kpi(hm(media(fin.filter(a => a.horario_finalizacao).map(minutos))), "Duração média da ronda")}
-    ${kpi(validas.length, "Ocorrências encontradas", ocs.length - validas.length ? `${ocs.length - validas.length} cancelada(s)` : "")}
-    ${kpi(resolvidas.length, "Resolvidas", `${pct(resolvidas.length, validas.length)} · ${naHora.length} na hora`)}
+    ${kpi(validas.length, "Ocorrências novas", [continuacoes ? `+${continuacoes} continuação(ões)` : "", ocs.length - todasVal.length ? `${ocs.length - todasVal.length} cancelada(s)` : ""].filter(Boolean).join(" · "))}
+    ${kpi(resolvidas.length, "Resolvidas", `${pct(resolvidas.length, pontas.length)} · ${naHora.length} na hora`)}
     ${kpi(fmt1(tempoRes) + (tempoRes == null ? "" : " d"), "Tempo médio de resolução", "sem contar as resolvidas na hora")}
     ${kpi(validas.filter(o => o.reincidencia).length, "Reincidências", "mesmo tipo e setor em 10 dias", validas.some(o => o.reincidencia))}
     ${kpi(abertas.length, "Abertas agora", `${abertas.filter(o => o.status === "em_analise").length} em análise`)}
@@ -1165,7 +1442,7 @@ function tabInd() {
   // setores
   const setNomes = [...new Set([...S.setores.filter(s => s.ativo).map(s => s.nome), ...validas.map(o => o.setor_nome)])];
   const setStats = setNomes.map(n => {
-    const l = validas.filter(o => o.setor_nome === n), r = l.filter(o => o.status === "resolvida");
+    const l = validas.filter(o => o.setor_nome === n), r = pontas.filter(o => o.setor_nome === n && o.status === "resolvida");
     return { n, qt: l.length, res: r.length, tempo: media(r.filter(o => o.acao_realizada !== "resolvido_hora" && o.data_resolucao).map(diasResol)), crit: l.filter(o => o.gravidade === "critica" || o.gravidade === "alta").length };
   });
   const melhores = [...setStats].sort((a, b) => a.qt - b.qt || a.crit - b.crit || (a.tempo ?? 0) - (b.tempo ?? 0));
@@ -1177,7 +1454,7 @@ function tabInd() {
     return { n, f: f.length, oc: validas.filter(o => o.auditor_nome === n).length, v: verifs.filter(v => v.auditor_nome === n).length, dur: media(f.filter(a => a.horario_finalizacao).map(minutos)) };
   }).sort((a, b) => b.f - a.f || b.oc - a.oc);
   const vres = contar(verifs, v => verifTxt[v.resultado]);
-  return ctrl + `<p class="muted" style="margin:-4px 0 12px">Período: ${brData(ini)} a ${brData(fim)}</p>` + kpis + graficoDia + `
+  return ctrl + semanal + `<p class="muted" style="margin:-4px 0 12px">Período: ${brData(ini)} a ${brData(fim)}</p>` + kpis + graficoDia + `
   <div class="grid g3">
     <div class="panel"><h2>Setores com mais ocorrências</h2>${barras(setStats.filter(s => s.qt).sort((a, b) => b.qt - a.qt).map(s => [s.n, s.qt]))}</div>
     <div class="panel"><h2>Por tipo</h2>${barras(contar(validas, o => o.tipo_ocorrencia))}</div>
@@ -1185,7 +1462,7 @@ function tabInd() {
   </div>
   <div class="panel"><h2>Desempenho dos setores</h2><p class="muted" style="margin-top:-4px">Do melhor para o pior: menos ocorrências, depois menos críticas ou altas, depois resolução mais rápida.</p>
     <div class="tw"><table><thead><tr><th>#</th><th>Setor</th><th>Ocorrências</th><th>Críticas/altas</th><th>Resolvidas</th><th>Tempo médio</th></tr></thead><tbody>
-    ${melhores.map((s, k) => `<tr><td>${k + 1}</td><td>${esc(s.n)}</td><td>${s.qt}</td><td>${s.crit}</td><td>${s.qt ? pct(s.res, s.qt) : "—"}</td><td>${s.tempo == null ? "—" : fmt1(s.tempo) + " d"}</td></tr>`).join("")}</tbody></table></div></div>
+    ${melhores.map((s, k) => `<tr><td>${k + 1}</td><td>${esc(s.n)}</td><td>${s.qt}</td><td>${s.crit}</td><td>${s.qt ? s.res : "—"}</td><td>${s.tempo == null ? "—" : fmt1(s.tempo) + " d"}</td></tr>`).join("")}</tbody></table></div></div>
   <div class="grid g2">
     <div class="panel"><h2>Desempenho por auditor</h2>${audRows.length ? `<div class="tw"><table><thead><tr><th>Auditor</th><th>Rondas</th><th>Ocorrências</th><th>Conferências</th><th>Duração média</th></tr></thead><tbody>
       ${audRows.map(r => `<tr><td>${esc(r.n)}</td><td>${r.f}</td><td>${r.oc}</td><td>${r.v}</td><td>${hm(r.dur)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Sem dados no período.</p>`}</div>
@@ -1334,10 +1611,16 @@ function tabHoje() {
   const setHtml = a ? `<div class="panel"><h2>Setores</h2>
     ${a.status === "em_andamento" && (a.total_ocorrencias || 0) > 0 ? `<div class="row" style="margin:-4px 0 8px"><button class="btn sm sp" data-act="csv-aud" data-id="${a.id}" data-d="${a.data}">Exportar CSV</button></div>` : ""}
     <div class="prog"><div class="row"><span>Setores concluídos</span><span class="sp">${concl}/${tot}</span></div><div class="bar"><i style="width:${tot ? concl / tot * 100 : 0}%"></i></div></div>
-    ${S.audSet.map(s => `<div class="item"><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""} · ${s.ocorrencias_count || 0} ocorrência${s.ocorrencias_count === 1 ? "" : "s"}</div></div>
-      <button class="btn sm sp" data-act="abrir-setor" data-id="${s.id}">${a.status === "em_andamento" && s.status !== "concluido" && S.modo === "exec" ? "Abrir setor" : "Ver"}</button></div>`).join("")}
+    ${S.audSet.map((s, k) => {
+      const np = pendDoSetor(s.setor_id).length, nf = faltaNoSetor(s.setor_id).length, livre = setorLiberado(s.id);
+      const travado = a.status === "em_andamento" && s.status !== "concluido" && !livre;
+      const btn = S.modo === "exec" && a.status === "em_andamento" && s.status !== "concluido"
+        ? (livre ? `<button class="btn sm primary sp" data-act="abrir-setor" data-id="${s.id}">${s.status === "em_andamento" ? "Continuar" : "Abrir setor"}</button>` : `<span class="sp badge b-neutral">🔒 Aguardando</span>`)
+        : `<button class="btn sm sp" data-act="abrir-setor" data-id="${s.id}">Ver</button>`;
+      return `<div class="item ${travado ? "travado" : ""}"><span class="ordem">${k + 1}</span><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""} · ${s.ocorrencias_count || 0} ocorrência${s.ocorrencias_count === 1 ? "" : "s"}${np ? ` · <b>${np - nf}/${np} pendência(s) conferida(s)</b>` : ""}</div></div>${btn}</div>`;
+    }).join("")}
     ${a.status === "em_andamento" ? `<div style="margin-top:14px" class="exec-only"><button class="btn primary block" data-act="finalizar" ${podeFinalizar() ? "" : "disabled"}>Finalizar auditoria</button>
-      ${podeFinalizar() ? "" : `<p class="muted" style="text-align:center;margin:6px 0 0;font-size:14px">${[!setoresOk() ? "conclua todos os setores" : "", faltaConferir().length ? `confira ${faltaConferir().length} pendência(s)` : ""].filter(Boolean).join(" e ").replace(/^./, c => c.toUpperCase())} para liberar.</p>`}</div>` : ""}
+      ${podeFinalizar() ? "" : `<p class="muted" style="text-align:center;margin:6px 0 0;font-size:14px">${[!setoresOk() ? "conclua todos os setores na ordem" : "", pendOrfas().some(o => !verifDe(o.id)) ? `confira ${pendOrfas().filter(o => !verifDe(o.id)).length} pendência(s) de setor fora da ronda` : ""].filter(Boolean).join(" e ").replace(/^./, c => c.toUpperCase())} para liberar.</p>`}</div>` : ""}
   </div>` : `<div class="panel"><h2>Setores</h2><p class="muted">A lista aparece quando a auditoria for iniciada.</p>${S.setores.filter(s => s.ativo).map(s => `<div class="item"><span class="dot"></span><div class="t">${esc(s.nome)}</div></div>`).join("")}</div>`;
 
   const lider = S.isAdmin && a ? `<div class="panel exec-only"><h2>Ações do líder</h2><div class="row"><button class="btn sm" data-act="reiniciar">Reiniciar</button><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir auditoria</button></div></div>` : "";
@@ -1347,16 +1630,17 @@ function tabHoje() {
 }
 
 function blocoPendHoje() {
-  const lista = pendDoDia(), idsAbertas = new Set(lista.map(o => o.id));
+  const lista = pendDoDia(), idsAbertas = new Set(lista.map(o => o.id)), orfas = new Set(pendOrfas().map(o => o.id));
   const encerradasHoje = S.verifHoje.filter(v => !idsAbertas.has(v.ocorrencia_id));
   const total = lista.length + encerradasHoje.length, feitas = S.verifHoje.length;
   const podeConferir = !!(S.aud?.colaborador_nome || S.atrib?.colaborador_nome);
-  const vBadge = v => `<span class="badge ${verifBadge[v.resultado]}">Conferida às ${horaDe(v.data_verificacao)}: ${verifTxt[v.resultado]}</span>`;
+  const vBadge = v => `<span class="badge ${verifBadge[v.resultado]}">Conferida às ${horaDe(v.data_verificacao)}: ${verifTxt[v.resultado]}${v.nova_ocorrencia_numero ? " → " + esc(v.nova_ocorrencia_numero) : ""}</span>`;
   return `<div class="panel"><h2>Pendências de auditorias anteriores</h2>
-  <p class="muted" style="margin-top:-4px">Todas precisam ser conferidas hoje antes de finalizar a ronda.</p>
+  <p class="muted" style="margin-top:-4px">Cada pendência é conferida dentro do próprio setor, na ordem da ronda. O setor só pode ser concluído depois de conferir todas as dele.</p>
   ${total ? `<div class="prog"><div class="row"><span>Conferidas hoje</span><span class="sp">${feitas}/${total}</span></div><div class="bar"><i style="width:${total ? feitas / total * 100 : 0}%"></i></div></div>` : ""}
-  ${lista.map(o => { const v = verifDe(o.id); return ocCard(o, `<div class="row" style="margin-top:8px"><span class="badge b-neutral">${diasAberto(o)} dia(s) em aberto</span>${v ? vBadge(v) : podeConferir ? `<button class="btn sm primary exec-only sp" data-act="conferir" data-id="${o.id}">Conferir pendência</button>` : ""}</div>`); }).join("")}
-  ${encerradasHoje.map(v => `<div class="pend oc oc-resolvida"><div class="row"><span class="num">${esc(v.ocorrencia_numero)}</span><span class="badge b-${v.ocorrencia_gravidade}">${gravTxt[v.ocorrencia_gravidade] || ""}</span>${vBadge(v)}</div><div class="t" style="margin-top:6px">${esc(v.ocorrencia_tipo)} · ${esc(v.ocorrencia_setor)}</div><div class="s muted">Por ${esc(v.auditor_nome)}${v.observacao ? ": " + esc(v.observacao) : ""}</div></div>`).join("")}
+  ${[...lista].sort((x, y) => { const ix = S.audSet.findIndex(s => s.setor_id === x.setor_id), iy = S.audSet.findIndex(s => s.setor_id === y.setor_id); return (ix < 0 ? 99 : ix) - (iy < 0 ? 99 : iy) || x.numero_seq - y.numero_seq; })
+    .map(o => { const v = verifDe(o.id), orf = orfas.has(o.id); return ocCard(o, `<div class="row" style="margin-top:8px"><span class="badge b-neutral">${diasAberto(o)} dia(s) em aberto</span>${v ? vBadge(v) : orf && podeConferir && S.aud?.status === "em_andamento" ? `<span class="s muted">Setor fora da ronda de hoje</span><button class="btn sm primary exec-only sp" data-act="conferir" data-id="${o.id}">Conferir pendência</button>` : `<span class="s muted sp">Conferir no setor ${esc(o.setor_nome)}</span>`}</div>`); }).join("")}
+  ${encerradasHoje.map(v => `<div class="pend oc ${v.resultado === "resolvido" ? "oc-resolvida" : "oc-pendente"}"><div class="row"><span class="num">${esc(v.ocorrencia_numero)}</span><span class="badge b-${v.ocorrencia_gravidade}">${gravTxt[v.ocorrencia_gravidade] || ""}</span>${vBadge(v)}</div><div class="t" style="margin-top:6px">${esc(v.ocorrencia_tipo)} · ${esc(v.ocorrencia_setor)}</div><div class="s muted">Por ${esc(v.auditor_nome)}${v.observacao ? ": " + esc(v.observacao) : ""}</div></div>`).join("")}
   ${!total ? `<p class="muted">Nenhuma pendência aberta de dias anteriores.</p>` : ""}</div>`;
 }
 function telaSetor() {
@@ -1364,11 +1648,17 @@ function telaSetor() {
   if (!s) { S.view = "main"; return ""; }
   const aberto = S.aud?.status === "em_andamento" && s.status !== "concluido";
   const ocs = S.ocsHoje.filter(o => o.auditoria_setor_id === s.id);
+  const pends = pendDoSetor(s.setor_id), falta = faltaNoSetor(s.setor_id), podeConf = aberto && S.aud?.status === "em_andamento";
+  const vb = v => `<span class="badge ${verifBadge[v.resultado]}">Conferida às ${horaDe(v.data_verificacao)}: ${verifTxt[v.resultado]}${v.nova_ocorrencia_numero ? " → " + esc(v.nova_ocorrencia_numero) : ""}</span>`;
+  const blocoPend = pends.length ? `<div class="panel ${falta.length ? "trava" : ""}"><h2>Pendências de dias anteriores (${pends.length - falta.length}/${pends.length} conferidas)</h2>
+    <p class="muted" style="margin-top:-4px">Veja no local se ainda estão lá. Resolvida sai da lista; se continua, registre de novo.</p>
+    ${pends.map(o => { const v = verifDe(o.id); return ocCard(o, `<div class="row" style="margin-top:8px"><span class="badge b-neutral">${diasAberto(o)} dia(s) em aberto</span>${v ? vb(v) : podeConf ? `<button class="btn sm primary exec-only sp" data-act="conferir" data-id="${o.id}">Conferir pendência</button>` : ""}</div>`); }).join("")}</div>` : "";
   return `<button class="back" data-act="voltar">‹ Voltar para a auditoria</button>
   <section class="hero" style="padding:16px 20px"><div class="date">Setor · ${stTxt[s.status]}${s.horario_inicio ? " · aberto às " + horaDe(s.horario_inicio) : ""}</div><div class="who" style="font-size:clamp(32px,7vw,48px)">${esc(s.setor_nome)}</div></section>
-  ${aberto ? `<div class="row" style="margin-bottom:16px"><button class="btn primary exec-only" data-act="registrar">Registrar ocorrência</button><button class="btn dark exec-only" data-act="concluir-setor">Concluir setor</button></div>`
+  ${aberto ? `<div class="row" style="margin-bottom:16px"><button class="btn primary exec-only" data-act="registrar">Registrar ocorrência</button><button class="btn dark exec-only" data-act="concluir-setor" ${falta.length ? "disabled" : ""}>Concluir setor</button>${falta.length ? `<span class="s exec-only" style="color:var(--bad);font-weight:600">🔒 Confira ${falta.length} pendência(s) deste setor para concluir</span>` : ""}</div>`
       : s.status === "concluido" ? `<div class="note">Setor concluído às ${horaDe(s.horario_conclusao)}. Não aceita novas ocorrências.</div>` : ""}
-  <div class="panel"><h2>Ocorrências neste setor (${ocs.length})</h2>
+  ${blocoPend}
+  <div class="panel"><h2>Ocorrências novas hoje neste setor (${ocs.length})</h2>
   ${ocs.length ? ocs.map(o => ocCard(o, S.isAdmin ? `<div class="row" style="margin-top:8px"><button class="btn sm danger exec-only" data-act="del-oc" data-id="${o.id}">Excluir ocorrência</button></div>` : "")).join("")
       : `<p class="muted">${aberto ? "Nenhuma ocorrência registrada. Se o setor estiver em ordem, conclua o setor." : "Nenhuma ocorrência registrada neste setor."}</p>`}</div>`;
 }
@@ -1402,7 +1692,7 @@ function listaPend() {
   queueMicrotask(() => { const c = $("#pfConta"); if (c) c.textContent = `${l.length} ocorrência(s)`; });
   if (!l.length) return `<p class="muted">Nenhuma ocorrência com esses filtros.</p>`;
   return l.map(o => {
-    const aberta = !["resolvida", "cancelada"].includes(o.status);
+    const aberta = !["resolvida", "cancelada", "substituida"].includes(o.status);
     return ocCard(o, `<div class="row" style="margin-top:8px"><span class="badge b-neutral">${diasAberto(o)} dia(s) ${aberta ? "em aberto" : "até encerrar"}</span>
       ${aberta ? `<div class="sp row"><button class="btn sm primary exec-only" data-act="resolver" data-id="${o.id}">Resolver</button>${S.isAdmin ? `<button class="btn sm danger exec-only" data-act="analise-cancel" data-id="${o.id}">Cancelar</button>` : ""}</div>` : ""}
       ${S.isAdmin ? `<button class="btn sm exec-only${aberta ? "" : " sp"}" data-act="del-oc" data-id="${o.id}">Excluir</button>` : ""}</div>`);
@@ -1578,8 +1868,10 @@ document.addEventListener("click", e => {
     case "padrao": return acao(criarPadrao);
     case "cfg": { const dados = { empresa_nome: $("#cfNome").value.trim(), empresa_subtitulo: $("#cfSub").value.trim(), foto_obrigatoria: $("#cfFoto").checked }; return acao(() => salvarConfig(dados)); }
     case "msg": return toast(d.m);
-    case "registrar": return modalRegistrar();
-    case "chip": { if (!F && d.k !== "x") return; F[d.k] = d.v; el.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === el)); if (d.k === "acao") atualizarObrigatorios(); return; }
+    case "registrar": return modalRegistrar(null);
+    case "chip": { if (!F && d.k !== "x") return; F[d.k] = d.v; el.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === el)); if (d.k === "acao") atualizarObrigatorios();
+      if (d.k === "res") { $("#confResolvido").hidden = d.v !== "resolvido"; $("#confContinua").hidden = d.v !== "continua_pendente"; $("#confEscolha").hidden = true; } return; }
+    case "continuar-oc": { const ref = F?.oc; if (!ref) return; fechar(); return modalRegistrar(ref); }
     case "foto": F.alvo = d.v; $("#fotoInput").value = ""; return $("#fotoInput").click();
     case "salvar-oc": return acao(salvarOcorrencia);
     case "del-oc": return acao(async () => { await excluirOcorrencia(d.id); if (S.todasOcs) await carregarTodas(); });
@@ -1598,6 +1890,8 @@ document.addEventListener("click", e => {
     case "hist-abrir": return acao(() => abrirHist(d.id));
     case "logo": $("#logoInput").value = ""; return $("#logoInput").click();
     case "logo-del": return acao(removerLogo);
+    case "sem-nav": { const n = addDias(S.ind.sem, Number(d.v)); if (n > segundaDe(S.hoje)) return; S.ind.sem = n; break; }
+    case "sem-docx": return acao(() => gerarRelatorioSemanal(S.ind.sem));
     case "ind-per": S.ind.per = d.v; if (d.v === "custom" && !S.ind.ini) { S.ind.ini = addDias(S.hoje, -29); S.ind.fim = S.hoje; } return acao(carregarInd);
     default: return;
   }
