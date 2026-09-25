@@ -252,7 +252,8 @@ const S = {
   audsHoje: [], aud: null, audSet: [],
   mes: todayStr().slice(0, 7), mesAuds: [], mesAtrib: {},
   progRef: todayStr(), progDias: [], progAuds: {},
-  ocsHoje: [], emAnalise: [],
+  ocsHoje: [], emAnalise: [], pendAbertas: [], verifHoje: [], todasOcs: null,
+  pf: { status: "abertas", grav: "", setor: "", auditor: "", resp: "", q: "", ord: "dias" },
   busy: false,
 };
 const $ = s => document.querySelector(s);
@@ -264,6 +265,9 @@ const gravTxt = { baixa: "Baixa", media: "Média", alta: "Alta", critica: "Crít
 const ocStTxt = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada" };
 const ocStBadge = { em_analise: "b-baixa", pendente: "b-pend", parcialmente_resolvida: "b-media", resolvida: "b-ok", cancelada: "b-neutral" };
 const acaoTxt = { resolvido_hora: "Resolvido na hora", encaminhado: "Encaminhado", nao_possivel: "Não foi possível" };
+const verifTxt = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua pendente" };
+const verifBadge = { resolvido: "b-ok", parcialmente_resolvido: "b-media", continua_pendente: "b-pend" };
+const GRAV_PESO = { critica: 4, alta: 3, media: 2, baixa: 1 };
 const FOTO_CAMPOS = ["foto_antes_id", "foto_depois_id", "foto_solucao_id"];
 const audTxt = { em_andamento: "Em andamento", finalizada: "Finalizada", reiniciada: "Reiniciada" };
 
@@ -351,7 +355,21 @@ function assinarCadastros() {
   }, e => console.error(e)));
   return Promise.all([col("setores", "setores"), col("tipos", "tipos"), col("colaboradores", "colabs"), cfg]);
 }
+let unsubPend = null, unsubVerif = null;
+function assinarPendencias() {
+  if (unsubPend) unsubPend();
+  if (unsubVerif) unsubVerif();
+  unsubPend = onSnapshot(query(collection(db, "ocorrencias"), where("status", "in", ["pendente", "parcialmente_resolvida"])), snap => {
+    S.pendAbertas = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.numero_seq - b.numero_seq);
+    render();
+  }, e => console.error(e));
+  unsubVerif = onSnapshot(query(collection(db, "verificacoes"), where("dia", "==", S.hoje)), snap => {
+    S.verifHoje = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    render();
+  }, e => console.error(e));
+}
 function assinarHoje() {
+  assinarPendencias();
   if (unsubAud) unsubAud();
   audIdAssinado = undefined;
   unsubAud = onSnapshot(query(collection(db, "auditorias"), where("data", "==", S.hoje)), snap => {
@@ -445,11 +463,17 @@ async function concluirSetor() {
   S.view = "main";
   if (nome) toast(nome + " concluído às " + horaDe(nowISO()));
 }
-function podeFinalizar() { return S.aud?.status === "em_andamento" && S.audSet.length > 0 && S.audSet.every(s => s.status === "concluido"); }
+const pendDoDia = () => S.pendAbertas.filter(o => o.auditoria_data < S.hoje);
+const verifDe = id => S.verifHoje.find(v => v.ocorrencia_id === id);
+const faltaConferir = () => pendDoDia().filter(o => !verifDe(o.id));
+const setoresOk = () => S.audSet.length > 0 && S.audSet.every(s => s.status === "concluido");
+function podeFinalizar() { return S.aud?.status === "em_andamento" && setoresOk() && faltaConferir().length === 0; }
 async function finalizar(obs) {
-  if (!podeFinalizar()) throw falha("Ainda há setores pendentes.");
+  if (!setoresOk()) throw falha("Ainda há setores pendentes.");
+  if (faltaConferir().length) throw falha(`Ainda há ${faltaConferir().length} pendência(s) sem conferência.`);
   await updateDoc(doc(db, "auditorias", S.aud.id), {
     status: "finalizada", horario_finalizacao: nowISO(), observacao_final: obs || "",
+    total_pendencias_conferidas: S.verifHoje.length,
     setores_concluidos: S.audSet.filter(s => s.status === "concluido").length,
   });
   toast("Auditoria finalizada");
@@ -552,7 +576,7 @@ async function receberFoto(file) {
   if (!file || !F) return;
   const alvo = F.alvo, url = await comprimir(file);
   F.fotos[alvo] = url;
-  const slot = document.querySelector(`.fslot[data-v="${alvo}"]`);
+  const slot = document.querySelector(`#sheet .fslot[data-v="${alvo}"]`);
   if (slot) { const im = slot.querySelector("img"); im.src = url; im.hidden = false; slot.classList.add("ok"); }
 }
 async function salvarOcorrencia() {
@@ -603,13 +627,16 @@ async function salvarOcorrencia() {
   toast(`Ocorrência ${numero} registrada` + (prev ? ` · reincidência de ${prev.numero}` : ""));
 }
 async function excluirOcorrencia(id) {
-  const o = [...S.ocsHoje, ...S.emAnalise].find(x => x.id === id);
+  const o = [...S.ocsHoje, ...S.emAnalise, ...(S.todasOcs || [])].find(x => x.id === id);
   if (!o || !S.isAdmin) return;
   if (!confirm(`Excluir a ocorrência ${o.numero}? Não dá para desfazer.`)) return;
   const aRef = doc(db, "auditorias", o.auditoria_id), sRef = doc(db, "auditoria_setores", o.auditoria_setor_id);
+  const filhos = [];
+  for (const col of ["fotos", "verificacoes"]) (await getDocs(query(collection(db, col), where("ocorrencia_id", "==", id)))).docs.forEach(d => filhos.push(d.ref));
   await runTransaction(db, async tx => {
     const a = await tx.get(aRef), s = await tx.get(sRef);
     FOTO_CAMPOS.forEach(k => { if (o[k]) tx.delete(doc(db, "fotos", o[k])); });
+    filhos.forEach(r => tx.delete(r));
     tx.delete(doc(db, "ocorrencias", id));
     if (a.exists()) tx.update(aRef, { total_ocorrencias: Math.max(0, (a.data().total_ocorrencias || 1) - 1) });
     if (s.exists()) tx.update(sRef, { ocorrencias_count: Math.max(0, (s.data().ocorrencias_count || 1) - 1) });
@@ -621,11 +648,12 @@ async function analiseConfirmar(id) {
   toast("Confirmada como pendência");
 }
 async function analiseCancelar(id) {
-  const o = S.emAnalise.find(x => x.id === id);
+  const o = [...S.emAnalise, ...S.pendAbertas, ...(S.todasOcs || [])].find(x => x.id === id);
   const j = prompt(`Cancelar ${o?.numero}. Justificativa (obrigatória):`);
   if (j === null) return;
   if (!j.trim()) throw falha("A justificativa é obrigatória para cancelar.");
   await updateDoc(doc(db, "ocorrencias", id), { status: "cancelada", cancelado_por_nome: S.adminNome, cancelado_por_uid: S.user.uid, data_cancelamento: nowISO(), justificativa: j.trim() });
+  if (S.todasOcs) await carregarTodas();
   toast("Ocorrência cancelada");
 }
 let limpezaFeita = false;
@@ -641,6 +669,7 @@ async function limparFotosAntigas() {
       if (!quando || quando >= corte) continue;
       const b = writeBatch(db);
       FOTO_CAMPOS.forEach(k => { if (o[k]) b.delete(doc(db, "fotos", o[k])); });
+      (await getDocs(query(collection(db, "fotos"), where("ocorrencia_id", "==", d.id)))).docs.forEach(f => b.delete(f.ref));
       b.update(d.ref, { fotos_apagadas: true, fotos_apagadas_em: nowISO() });
       await b.commit(); n++;
     }
@@ -658,6 +687,8 @@ function ocCard(o, extra = "") {
     <div class="s">${esc(o.descricao)}</div>
     <div class="s muted">${acaoTxt[o.acao_realizada] || ""}${o.responsavel ? " · Responsável: " + esc(o.responsavel) : ""} · Auditor: ${esc(o.auditor_nome)}</div>
     ${o.observacao ? `<div class="s muted">Obs.: ${esc(o.observacao)}</div>` : ""}
+    ${o.verificacoes_count ? `<div class="s muted">Conferida ${o.verificacoes_count}x · última: ${verifTxt[o.ultima_verificacao_resultado] || ""} em ${brData(String(o.ultima_verificacao_em).slice(0, 10))}</div>` : ""}
+    ${o.status === "resolvida" && o.resolvido_por_nome && o.acao_realizada !== "resolvido_hora" ? `<div class="s muted">Resolvida por ${esc(o.resolvido_por_nome)} em ${brData(String(o.data_resolucao).slice(0, 10))}${o.descricao_solucao ? ": " + esc(o.descricao_solucao) : ""}</div>` : ""}
     ${o.justificativa ? `<div class="s muted">Cancelada por ${esc(o.cancelado_por_nome)}: ${esc(o.justificativa)}</div>` : ""}
     ${fotos.length ? `<div class="row" style="margin-top:8px">${fotos.map(([k, l]) => `<button class="thumb" data-act="ver-foto" data-id="${o[k]}" data-l="${esc(o.numero)} · ${l}"><img data-foto="${o[k]}" alt="Foto ${l}"><span>${l}</span></button>`).join("")}</div>` : o.fotos_apagadas ? `<div class="s muted">Fotos removidas após 90 dias</div>` : ""}
     ${extra}</div>`;
@@ -666,6 +697,87 @@ async function verFoto(id, legenda) {
   abrirModal(`<h2>${esc(legenda)}</h2><div class="fotobig"><img alt="" id="fotoBig"></div><div class="row" style="margin-top:12px"><button class="btn sp" data-act="fechar">Fechar</button></div>`);
   const src = await carregarFoto(id);
   const im = $("#fotoBig"); if (im) { if (src) im.src = src; else im.replaceWith(Object.assign(document.createElement("p"), { className: "muted", textContent: "Foto não encontrada." })); }
+}
+
+/* ================= PENDÊNCIAS ================= */
+function slotFoto(v, rotulo) { return `<button type="button" class="fslot" data-act="foto" data-v="${v}"><img alt="" hidden><span>${rotulo}</span></button>`; }
+function modalConferir(id) {
+  const o = S.pendAbertas.find(x => x.id === id);
+  if (!o) return;
+  const quem = S.aud?.colaborador_nome || S.atrib?.colaborador_nome;
+  if (!quem) return toast("Sem auditor definido para hoje.");
+  F = { tipoModal: "conf", oc: o, res: "", fotos: {} };
+  abrirModal(`<h2>Conferir ${esc(o.numero)}</h2>
+  <div class="auto">${esc(o.tipo_ocorrencia)} · ${esc(o.setor_nome)}${o.local ? " · " + esc(o.local) : ""}<br>${esc(o.descricao)}<br>Aberta em ${brData(o.auditoria_data)} · conferência por ${esc(quem)}, com data e hora automáticas</div>
+  <div class="field"><label>Resultado *</label><div class="chips">${Object.entries(verifTxt).map(([v, l]) => `<button type="button" data-act="chip" data-k="res" data-v="${v}">${l}</button>`).join("")}</div></div>
+  <div class="field"><label for="vObs">Observação</label><textarea id="vObs" rows="2" placeholder="O que foi visto no local"></textarea></div>
+  <div class="field"><label>Foto *</label><div class="row">${slotFoto("conf", "Tirar foto")}</div></div>
+  <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-conf">Registrar conferência</button></div>`);
+}
+async function salvarConferencia() {
+  if (!F || F.tipoModal !== "conf") return;
+  const o = F.oc, obs = $("#vObs").value.trim();
+  if (!F.res) throw falha("Escolha o resultado da conferência.");
+  if (!F.fotos.conf) throw falha("A foto da conferência é obrigatória.");
+  const quemId = S.aud?.colaborador_id || S.atrib?.colaborador_id, quem = S.aud?.colaborador_nome || S.atrib?.colaborador_nome;
+  const agora = nowISO(), vRef = doc(db, "verificacoes", `${S.hoje}_${o.id}`), oRef = doc(db, "ocorrencias", o.id), fRef = doc(collection(db, "fotos"));
+  const res = F.res, foto = F.fotos.conf;
+  await runTransaction(db, async tx => {
+    const v = await tx.get(vRef), oc = await tx.get(oRef);
+    if (v.exists()) throw falha("Esta pendência já foi conferida hoje.");
+    if (!oc.exists()) throw falha("Ocorrência não encontrada.");
+    const od = oc.data();
+    if (!["pendente", "parcialmente_resolvida"].includes(od.status)) throw falha("Esta ocorrência não está mais pendente.");
+    tx.set(fRef, { data: foto, tipo: "conferencia", ocorrencia_id: o.id, ocorrencia_numero: o.numero, auditoria_id: S.aud?.id || null, verificacao_id: vRef.id, criado_em: agora });
+    tx.set(vRef, {
+      ocorrencia_id: o.id, ocorrencia_numero: o.numero, ocorrencia_tipo: od.tipo_ocorrencia, ocorrencia_setor: od.setor_nome, ocorrencia_gravidade: od.gravidade,
+      auditor_id: quemId, auditor_nome: quem, data_verificacao: agora, dia: S.hoje, auditoria_id: S.aud?.id || null,
+      resultado: res, observacao: obs, foto_id: fRef.id, registrado_por_uid: S.user.uid, criado_ts: serverTimestamp(),
+    });
+    const upd = { ultima_verificacao_em: agora, ultima_verificacao_resultado: res, verificacoes_count: (od.verificacoes_count || 0) + 1 };
+    if (res === "resolvido") Object.assign(upd, { status: "resolvida", data_resolucao: agora, resolvido_por_nome: quem, resolvido_por_id: quemId, descricao_solucao: obs || "Resolvido (confirmado na conferência)", foto_solucao_id: fRef.id });
+    else if (res === "parcialmente_resolvido") upd.status = "parcialmente_resolvida";
+    else upd.status = "pendente";
+    tx.update(oRef, upd);
+  });
+  fechar();
+  toast(`${o.numero}: ${verifTxt[res]}`);
+}
+function modalResolver(id) {
+  const o = (S.todasOcs || []).find(x => x.id === id);
+  if (!o) return;
+  F = { tipoModal: "resolver", oc: o, fotos: {} };
+  abrirModal(`<h2>Resolver ${esc(o.numero)}</h2>
+  <div class="auto">${esc(o.tipo_ocorrencia)} · ${esc(o.setor_nome)}${o.local ? " · " + esc(o.local) : ""}<br>${esc(o.descricao)}<br>Data e hora registradas automaticamente</div>
+  <div class="field"><label for="rNome">Seu nome *</label><input id="rNome" autocomplete="name" value="${esc(S.adminNome || "")}"></div>
+  <div class="field"><label for="rDesc">O que foi feito *</label><textarea id="rDesc" rows="2"></textarea></div>
+  <div class="field"><label>Foto da solução *</label><div class="row">${slotFoto("sol", "Tirar foto")}</div></div>
+  <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-resolver">Marcar como resolvida</button></div>`);
+}
+async function salvarResolucao() {
+  if (!F || F.tipoModal !== "resolver") return;
+  const o = F.oc, nome = $("#rNome").value.trim(), desc = $("#rDesc").value.trim();
+  if (!nome) throw falha("Informe seu nome.");
+  if (!desc) throw falha("Descreva o que foi feito.");
+  if (!F.fotos.sol) throw falha("A foto da solução é obrigatória.");
+  const agora = nowISO(), oRef = doc(db, "ocorrencias", o.id), fRef = doc(collection(db, "fotos")), foto = F.fotos.sol;
+  await runTransaction(db, async tx => {
+    const oc = await tx.get(oRef);
+    if (!oc.exists()) throw falha("Ocorrência não encontrada.");
+    if (["resolvida", "cancelada"].includes(oc.data().status)) throw falha("Esta ocorrência já foi encerrada.");
+    tx.set(fRef, { data: foto, tipo: "solucao", ocorrencia_id: o.id, ocorrencia_numero: o.numero, auditoria_id: null, criado_em: agora });
+    tx.update(oRef, { status: "resolvida", data_resolucao: agora, resolvido_por_nome: nome, resolvido_por_uid: S.user.uid, descricao_solucao: desc, foto_solucao_id: fRef.id, resolvido_fora_da_ronda: true });
+  });
+  fechar();
+  await carregarTodas();
+  toast(`${o.numero} resolvida`);
+}
+async function carregarTodas() {
+  S.todasOcs = (await getDocs(collection(db, "ocorrencias"))).docs.map(d => ({ id: d.id, ...d.data() }));
+}
+function diasAberto(o) {
+  const fim = o.status === "resolvida" ? String(o.data_resolucao).slice(0, 10) : o.status === "cancelada" ? String(o.data_cancelamento).slice(0, 10) : S.hoje;
+  return Math.max(0, Math.round((parseD(fim) - parseD(o.auditoria_data)) / 86400000));
 }
 
 /* ================= ADMIN: LOGIN ================= */
@@ -773,7 +885,7 @@ function render() {
   if (S.view === "admin") return $("#app").innerHTML = S.isAdmin ? telaAdmin() : telaLogin();
   const tabs = [["hoje", "Auditoria de hoje"], ["pend", "Pendências"], ["dias", "Dias"], ["ind", "Indicadores"], ["def", "Definições"]];
   $("#app").innerHTML = `<div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button data-act="tab" data-v="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>`
-    + ({ hoje: tabHoje, pend: () => emBreve("Pendências", "Chega na fase 3, junto com a conferência de pendências."), dias: tabDias, ind: () => emBreve("Indicadores", "Chega na fase 5, quando já houver ocorrências registradas."), def: tabDef })[S.tab]();
+    + ({ hoje: tabHoje, pend: tabPend, dias: tabDias, ind: () => emBreve("Indicadores", "Chega na fase 5, quando já houver ocorrências registradas."), def: tabDef })[S.tab]();
 }
 const emBreve = (t, m) => `<div class="panel"><h2>${t}</h2><p class="muted">${m}</p></div>`;
 
@@ -809,15 +921,28 @@ function tabHoje() {
     ${S.audSet.map(s => `<div class="item"><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""} · ${s.ocorrencias_count || 0} ocorrência${s.ocorrencias_count === 1 ? "" : "s"}</div></div>
       <button class="btn sm sp" data-act="abrir-setor" data-id="${s.id}">${a.status === "em_andamento" && s.status !== "concluido" && S.modo === "exec" ? "Abrir setor" : "Ver"}</button></div>`).join("")}
     ${a.status === "em_andamento" ? `<div style="margin-top:14px" class="exec-only"><button class="btn primary block" data-act="finalizar" ${podeFinalizar() ? "" : "disabled"}>Finalizar auditoria</button>
-      ${podeFinalizar() ? "" : '<p class="muted" style="text-align:center;margin:6px 0 0;font-size:14px">Conclua todos os setores para liberar.</p>'}</div>` : ""}
+      ${podeFinalizar() ? "" : `<p class="muted" style="text-align:center;margin:6px 0 0;font-size:14px">${[!setoresOk() ? "conclua todos os setores" : "", faltaConferir().length ? `confira ${faltaConferir().length} pendência(s)` : ""].filter(Boolean).join(" e ").replace(/^./, c => c.toUpperCase())} para liberar.</p>`}</div>` : ""}
   </div>` : `<div class="panel"><h2>Setores</h2><p class="muted">A lista aparece quando a auditoria for iniciada.</p>${S.setores.filter(s => s.ativo).map(s => `<div class="item"><span class="dot"></span><div class="t">${esc(s.nome)}</div></div>`).join("")}</div>`;
 
   const lider = S.isAdmin && a ? `<div class="panel exec-only"><h2>Ações do líder</h2><div class="row"><button class="btn sm" data-act="reiniciar">Reiniciar</button><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir auditoria</button></div></div>` : "";
 
-  return hero + acaoHtml + `<div class="grid g2"><div>${setHtml}<div class="panel"><h2>Pendências de auditorias anteriores</h2><p class="muted">A conferência de pendências entra na fase 3.</p></div></div>
+  return hero + acaoHtml + `<div class="grid g2"><div>${setHtml}${blocoPendHoje()}</div>
     <div><div class="panel"><h2>Esta semana</h2>${semanaHtml(S.semana, S.semanaAuds)}</div>${lider}</div></div>`;
 }
 
+function blocoPendHoje() {
+  const lista = pendDoDia(), idsAbertas = new Set(lista.map(o => o.id));
+  const encerradasHoje = S.verifHoje.filter(v => !idsAbertas.has(v.ocorrencia_id));
+  const total = lista.length + encerradasHoje.length, feitas = S.verifHoje.length;
+  const podeConferir = !!(S.aud?.colaborador_nome || S.atrib?.colaborador_nome);
+  const vBadge = v => `<span class="badge ${verifBadge[v.resultado]}">Conferida às ${horaDe(v.data_verificacao)}: ${verifTxt[v.resultado]}</span>`;
+  return `<div class="panel"><h2>Pendências de auditorias anteriores</h2>
+  <p class="muted" style="margin-top:-4px">Todas precisam ser conferidas hoje antes de finalizar a ronda.</p>
+  ${total ? `<div class="prog"><div class="row"><span>Conferidas hoje</span><span class="sp">${feitas}/${total}</span></div><div class="bar"><i style="width:${total ? feitas / total * 100 : 0}%"></i></div></div>` : ""}
+  ${lista.map(o => { const v = verifDe(o.id); return ocCard(o, `<div class="row" style="margin-top:8px"><span class="badge b-neutral">${diasAberto(o)} dia(s) em aberto</span>${v ? vBadge(v) : podeConferir ? `<button class="btn sm primary exec-only sp" data-act="conferir" data-id="${o.id}">Conferir pendência</button>` : ""}</div>`); }).join("")}
+  ${encerradasHoje.map(v => `<div class="pend oc oc-resolvida"><div class="row"><span class="num">${esc(v.ocorrencia_numero)}</span><span class="badge b-${v.ocorrencia_gravidade}">${gravTxt[v.ocorrencia_gravidade] || ""}</span>${vBadge(v)}</div><div class="t" style="margin-top:6px">${esc(v.ocorrencia_tipo)} · ${esc(v.ocorrencia_setor)}</div><div class="s muted">Por ${esc(v.auditor_nome)}${v.observacao ? ": " + esc(v.observacao) : ""}</div></div>`).join("")}
+  ${!total ? `<p class="muted">Nenhuma pendência aberta de dias anteriores.</p>` : ""}</div>`;
+}
 function telaSetor() {
   const s = S.audSet.find(x => x.id === S.setorAtual);
   if (!s) { S.view = "main"; return ""; }
@@ -832,6 +957,41 @@ function telaSetor() {
       : `<p class="muted">${aberto ? "Nenhuma ocorrência registrada. Se o setor estiver em ordem, conclua o setor." : "Nenhuma ocorrência registrada neste setor."}</p>`}</div>`;
 }
 
+function tabPend() {
+  if (!S.todasOcs) return `<div class="panel">Carregando ocorrências…</div>`;
+  const f = S.pf, uniq = k => [...new Set(S.todasOcs.map(o => o[k]).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const sel = (k, rot, opts) => `<select data-pf="${k}" aria-label="${rot}"><option value="">${rot}: todos</option>${opts.map(([v, l]) => `<option value="${esc(v)}" ${f[k] === v ? "selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
+  return `<div class="panel"><div class="filters">
+    <input data-pf="q" placeholder="Buscar número, código, local, descrição…" value="${esc(f.q)}">
+    <select data-pf="status" aria-label="Status">${[["abertas", "Status: abertas"], ["", "Status: todos"], ...Object.entries(ocStTxt)].map(([v, l]) => `<option value="${v}" ${f.status === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+    ${sel("grav", "Gravidade", Object.entries(gravTxt).reverse())}
+    ${sel("setor", "Setor", uniq("setor_nome").map(x => [x, x]))}
+    ${sel("auditor", "Auditor", uniq("auditor_nome").map(x => [x, x]))}
+    ${sel("resp", "Responsável", uniq("responsavel").map(x => [x, x]))}
+    <select data-pf="ord" aria-label="Ordenar">${[["dias", "Ordenar: dias em aberto"], ["data", "Ordenar: mais recentes"], ["grav", "Ordenar: gravidade"]].map(([v, l]) => `<option value="${v}" ${f.ord === v ? "selected" : ""}>${l}</option>`).join("")}</select>
+  </div><div class="row" style="margin-bottom:8px"><span class="muted" id="pfConta"></span><button class="btn sm sp" data-act="recarregar-pend">Atualizar</button></div>
+  <div id="pfLista">${listaPend()}</div></div>`;
+}
+function filtrarPend() {
+  const f = S.pf, q = f.q.trim().toLowerCase();
+  let l = S.todasOcs.filter(o =>
+    (f.status === "abertas" ? ["em_analise", "pendente", "parcialmente_resolvida"].includes(o.status) : !f.status || o.status === f.status)
+    && (!f.grav || o.gravidade === f.grav) && (!f.setor || o.setor_nome === f.setor) && (!f.auditor || o.auditor_nome === f.auditor) && (!f.resp || o.responsavel === f.resp)
+    && (!q || [o.numero, o.produto_codigo, o.produto_descricao, o.local, o.descricao, o.tipo_ocorrencia, o.responsavel].join(" ").toLowerCase().includes(q)));
+  const cmp = { dias: (a, b) => diasAberto(b) - diasAberto(a) || b.numero_seq - a.numero_seq, data: (a, b) => b.numero_seq - a.numero_seq, grav: (a, b) => GRAV_PESO[b.gravidade] - GRAV_PESO[a.gravidade] || diasAberto(b) - diasAberto(a) };
+  return l.sort(cmp[f.ord]);
+}
+function listaPend() {
+  const l = filtrarPend();
+  queueMicrotask(() => { const c = $("#pfConta"); if (c) c.textContent = `${l.length} ocorrência(s)`; });
+  if (!l.length) return `<p class="muted">Nenhuma ocorrência com esses filtros.</p>`;
+  return l.map(o => {
+    const aberta = !["resolvida", "cancelada"].includes(o.status);
+    return ocCard(o, `<div class="row" style="margin-top:8px"><span class="badge b-neutral">${diasAberto(o)} dia(s) ${aberta ? "em aberto" : "até encerrar"}</span>
+      ${aberta ? `<div class="sp row"><button class="btn sm primary exec-only" data-act="resolver" data-id="${o.id}">Resolver</button>${S.isAdmin ? `<button class="btn sm danger exec-only" data-act="analise-cancel" data-id="${o.id}">Cancelar</button>` : ""}</div>` : ""}
+      ${S.isAdmin ? `<button class="btn sm exec-only${aberta ? "" : " sp"}" data-act="del-oc" data-id="${o.id}">Excluir</button>` : ""}</div>`);
+  }).join("");
+}
 function tabDias() {
   const [y, m] = S.mes.split("-").map(Number);
   const first = dow(S.mes + "-01"), n = new Date(Date.UTC(y, m, 0)).getUTCDate();
@@ -939,7 +1099,7 @@ function admCfg() {
 function abrirModal(html) { $("#sheet").innerHTML = html; $("#modal").classList.add("open"); }
 function fechar() { $("#modal").classList.remove("open"); F = null; }
 function modalFinalizar() {
-  abrirModal(`<h2>Finalizar auditoria</h2><div class="auto">${S.audSet.length} setores concluídos · horário de finalização registrado automaticamente</div>
+  abrirModal(`<h2>Finalizar auditoria</h2><div class="auto">${S.audSet.length} setores concluídos · ${S.verifHoje.length} pendência(s) conferida(s) · ${S.aud?.total_ocorrencias || 0} ocorrência(s) nova(s) · horário de finalização registrado automaticamente</div>
   <div class="field"><label for="fObs">Observação geral do dia</label><textarea id="fObs" rows="3" placeholder="Resumo da ronda"></textarea></div>
   <div class="row"><button class="btn" data-act="fechar">Voltar</button><button class="btn primary sp" data-act="confirmar-fim">Finalizar auditoria</button></div>`);
 }
@@ -953,7 +1113,7 @@ document.addEventListener("click", e => {
   const d = el.dataset;
   switch (a) {
     case "modo": S.modo = d.v; break;
-    case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); break;
+    case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); if (d.v === "pend") return acao(carregarTodas); break;
     case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); break;
     case "go-main": S.view = "main"; break;
     case "go-admin": S.view = "admin"; if (S.isAdmin && S.adminTab === "prog") return acao(carregarProg); break;
@@ -981,15 +1141,22 @@ document.addEventListener("click", e => {
     case "chip": { if (!F && d.k !== "x") return; F[d.k] = d.v; el.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === el)); if (d.k === "acao") atualizarObrigatorios(); return; }
     case "foto": F.alvo = d.v; $("#fotoInput").value = ""; return $("#fotoInput").click();
     case "salvar-oc": return acao(salvarOcorrencia);
-    case "del-oc": return acao(() => excluirOcorrencia(d.id));
+    case "del-oc": return acao(async () => { await excluirOcorrencia(d.id); if (S.todasOcs) await carregarTodas(); });
     case "analise-ok": return acao(() => analiseConfirmar(d.id));
     case "analise-cancel": return acao(() => analiseCancelar(d.id));
     case "ver-foto": return verFoto(d.id, d.l);
+    case "conferir": return modalConferir(d.id);
+    case "salvar-conf": return acao(salvarConferencia);
+    case "resolver": return modalResolver(d.id);
+    case "salvar-resolver": return acao(salvarResolucao);
+    case "recarregar-pend": return acao(carregarTodas);
     default: return;
   }
   render();
 });
 document.addEventListener("change", e => {
+  const pf = e.target.closest("select[data-pf]");
+  if (pf) return aplicarFiltro(pf);
   const el = e.target.closest("[data-chg]");
   if (!el) return;
   const d = el.dataset;
@@ -997,6 +1164,11 @@ document.addEventListener("change", e => {
   if (d.chg === "nome") { const v = el.value.trim(); if (!v) return render(); return acao(() => updCad(d.k, d.id, { nome: v })); }
   if (d.chg === "ativo" || d.chg === "fixo") return acao(() => updCad(d.k, d.id, { [d.chg]: el.checked }));
 });
+function aplicarFiltro(el) {
+  S.pf[el.dataset.pf] = el.value;
+  const l = $("#pfLista"); if (l) { l.innerHTML = listaPend(); hydrateFotos(); }
+}
+document.addEventListener("input", e => { const el = e.target.closest("[data-pf]"); if (el && el.tagName === "INPUT") aplicarFiltro(el); });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && (e.target.id === "lgPass" || e.target.id === "lgUser")) $("[data-act=login]")?.click(); if (e.key === "Enter" && e.target.id === "novoNome") $("[data-act=add]")?.click(); });
 $("#modal").addEventListener("click", e => { if (e.target.id === "modal" && !F) fechar(); });
 $("#fotoInput").addEventListener("change", e => { const f = e.target.files?.[0]; if (f) receberFoto(f).catch(err => toast(err.userMsg || "Erro ao processar a foto.")); });
