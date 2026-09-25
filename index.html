@@ -216,6 +216,8 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .mono{font-family:ui-monospace,Consolas,monospace}
 .panel.perigo{border:2px solid var(--bad)}
 .panel.perigo h2{color:var(--bad)}
+.ciclo{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 12px;background:var(--surface-2)}
+.ciclo-lista{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 </style>
 </head>
 <body>
@@ -322,32 +324,65 @@ function poolRodizio() {
   const rot = S.colabs.filter(c => c.ativo && !c.fixo);
   return rot.length ? rot : S.colabs.filter(c => c.ativo);
 }
-async function getAtribuicaoDoDia(data) {
+/* Ciclo fechado: cada colaborador do rodízio faz 1 ronda por ciclo; ninguém repete antes de todos passarem.
+   A vez é consumida mesmo se a ronda não for realizada (o sistema marca "não fez"). */
+async function todasAtribuicoes() {
+  return (await getDocs(collection(db, "atribuicoes"))).docs.map(d => d.data()).filter(a => a.colaborador_id && a.data).sort((a, b) => a.data.localeCompare(b.data));
+}
+function montarCiclos(lista, pool) {
+  const ids = new Set(pool.map(c => c.id)), ciclos = [];
+  let atual = { numero: 1, itens: new Map() };
+  for (const a of lista) {
+    if (!ids.has(a.colaborador_id)) continue; // fixo ou desativado não entra na conta
+    if (atual.itens.size >= ids.size || atual.itens.has(a.colaborador_id) && [...ids].every(id => atual.itens.has(id))) {
+      ciclos.push(atual); atual = { numero: atual.numero + 1, itens: new Map() };
+    }
+    if (!atual.itens.has(a.colaborador_id)) atual.itens.set(a.colaborador_id, a);
+  }
+  ciclos.push(atual);
+  return ciclos;
+}
+function estadoCiclo(lista, pool) {
+  const ciclos = montarCiclos(lista, pool), atual = ciclos[ciclos.length - 1];
+  const ult = [...lista].reverse().find(a => pool.some(c => c.id === a.colaborador_id));
+  return { numero: atual.numero, feitos: atual.itens, ultimo: ult?.colaborador_id || null, completo: pool.length > 0 && pool.every(c => atual.itens.has(c.id)) };
+}
+function proximoDoCiclo(est, pool, reservados = new Set()) {
+  let pend = est.completo ? pool : pool.filter(c => !est.feitos.has(c.id));
+  const livres = pend.filter(c => !reservados.has(c.id));
+  if (livres.length) pend = livres;
+  if (!pend.length) return pool[0] || null;
+  const iu = pool.findIndex(c => c.id === est.ultimo);
+  for (let k = 1; k <= pool.length; k++) { const c = pool[(iu + k + pool.length) % pool.length]; if (pend.includes(c)) return c; }
+  return pend[0];
+}
+async function getAtribuicaoDoDia(data, ctx = {}) {
   const ref = doc(db, "atribuicoes", data);
   const snap = await getDoc(ref);
-  if (snap.exists()) return snap.data();
+  if (snap.exists()) { const v = snap.data(); if (ctx.lista && !ctx.lista.some(a => a.data === data)) ctx.lista.push(v); return v; }
   if (!diaUtil(data)) return null;
   const pool = poolRodizio();
   if (!pool.length) return null;
-  const prev = await getDocs(query(collection(db, "atribuicoes"), where("data", "<", data), orderBy("data", "desc"), limit(1)));
-  let prox = pool[0];
-  if (!prev.empty) {
-    const idx = pool.findIndex(c => c.id === prev.docs[0].data().colaborador_id);
-    prox = pool[(idx + 1) % pool.length];
-  }
-  const novo = { data, dia_semana: DIAS[dow(data)], colaborador_id: prox.id, colaborador_nome: prox.nome, criado_em: nowISO(), criado_ts: serverTimestamp() };
-  return runTransaction(db, async tx => {
+  ctx.lista ||= await todasAtribuicoes();
+  const antes = ctx.lista.filter(a => a.data < data).sort((a, b) => a.data.localeCompare(b.data));
+  const reservados = new Set(ctx.lista.filter(a => a.data > data && a.manual).map(a => a.colaborador_id));
+  const est = estadoCiclo(antes, pool);
+  const prox = proximoDoCiclo(est, pool, reservados);
+  const novo = { data, dia_semana: DIAS[dow(data)], colaborador_id: prox.id, colaborador_nome: prox.nome, ciclo: est.completo ? est.numero + 1 : est.numero, criado_em: nowISO(), criado_ts: serverTimestamp() };
+  const res = await runTransaction(db, async tx => {
     const s = await tx.get(ref);
     if (s.exists()) return s.data();
     tx.set(ref, novo);
     return novo;
   });
+  ctx.lista.push(res);
+  return res;
 }
 async function getProgramacaoSemana(ref) {
-  const seg = segundaDe(ref), dias = [];
+  const seg = segundaDe(ref), dias = [], ctx = {};
   for (let i = 0; i < 5; i++) {
     const d = addDias(seg, i);
-    dias.push({ data: d, atrib: await getAtribuicaoDoDia(d) });
+    dias.push({ data: d, atrib: await getAtribuicaoDoDia(d, ctx) });
   }
   return dias;
 }
@@ -1392,13 +1427,14 @@ async function carregarInd() {
   let [ini, fim] = periodoInd();
   if (ini > fim) [ini, fim] = [fim, ini];
   const entre = (col, campo) => getDocs(query(collection(db, col), where(campo, ">=", ini), where(campo, "<=", fim)));
-  const [auds, ocS, vS, abS, resS] = await Promise.all([
+  const [auds, ocS, vS, abS, resS, atS] = await Promise.all([
     audsEntre(ini, fim), entre("ocorrencias", "auditoria_data"), entre("verificacoes", "dia"),
     getDocs(query(collection(db, "ocorrencias"), where("status", "in", ["em_analise", "pendente", "parcialmente_resolvida"]))),
     getDocs(query(collection(db, "ocorrencias"), where("status", "==", "resolvida"))),
+    entre("atribuicoes", "data"),
   ]);
   const dd = s => s.docs.map(d => d.data());
-  S.ind.dados = { ini, fim, auds, ocs: dd(ocS), verifs: dd(vS), abertas: dd(abS),
+  S.ind.dados = { ini, fim, auds, ocs: dd(ocS), verifs: dd(vS), abertas: dd(abS), atribs: dd(atS),
     resolvidasPer: dd(resS).filter(o => { const x = String(o.data_resolucao || "").slice(0, 10); return x >= ini && x <= fim; }) };
 }
 const media = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
@@ -1422,7 +1458,7 @@ function tabInd() {
   const semanal = `<div class="panel semanal"><div class="row"><div><h2 style="margin:0">Relatório da semana</h2><p class="muted" style="margin:2px 0 0;font-size:14px">Word com resumo, dia a dia, rankings, pendências e todas as ocorrências com fotos. Na sexta, baixa sozinho ao finalizar a ronda.</p></div></div>
     <div class="row" style="margin-top:10px"><button class="btn sm" data-act="sem-nav" data-v="-7" aria-label="Semana anterior">‹</button><b class="cond" style="font-size:18px">${brData(i.sem)} a ${brData(semSex)}</b><button class="btn sm" data-act="sem-nav" data-v="7" ${atual ? "disabled" : ""} aria-label="Próxima semana">›</button>${atual ? `<span class="badge b-pend">Semana atual</span>` : ""}<button class="btn sm dark sp" data-act="sem-docx">Baixar relatório da semana</button></div></div>`;
   if (!D) return ctrl + semanal + `<div class="panel">Carregando indicadores…</div>`;
-  const { auds, ocs, verifs, abertas, resolvidasPer, ini, fim } = D;
+  const { auds, ocs, verifs, abertas, resolvidasPer, ini, fim, atribs = [] } = D;
   const fin = auds.filter(a => a.status === "finalizada");
   const diasFin = new Set(fin.map(a => a.data));
   let uteis = 0, naoFeitas = 0;
@@ -1463,10 +1499,11 @@ function tabInd() {
   const melhores = [...setStats].sort((a, b) => a.qt - b.qt || a.crit - b.crit || (a.tempo ?? 0) - (b.tempo ?? 0));
   const gravCor = { critica: "var(--crit)", alta: "var(--bad)", media: "var(--warn)", baixa: "var(--info)" };
   // auditores
-  const nomesAud = [...new Set([...fin.map(a => a.colaborador_nome), ...validas.map(o => o.auditor_nome), ...verifs.map(v => v.auditor_nome)])].filter(Boolean).sort();
+  const faltas = atribs.filter(a => a.data < S.hoje && diaUtil(a.data) && !diasFin.has(a.data));
+  const nomesAud = [...new Set([...fin.map(a => a.colaborador_nome), ...validas.map(o => o.auditor_nome), ...verifs.map(v => v.auditor_nome), ...faltas.map(a => a.colaborador_nome)])].filter(Boolean).sort();
   const audRows = nomesAud.map(n => {
     const f = fin.filter(a => a.colaborador_nome === n);
-    return { n, f: f.length, oc: validas.filter(o => o.auditor_nome === n).length, v: verifs.filter(v => v.auditor_nome === n).length, dur: media(f.filter(a => a.horario_finalizacao).map(minutos)) };
+    return { n, f: f.length, nf: faltas.filter(a => a.colaborador_nome === n).length, oc: validas.filter(o => o.auditor_nome === n).length, v: verifs.filter(v => v.auditor_nome === n).length, dur: media(f.filter(a => a.horario_finalizacao).map(minutos)) };
   }).sort((a, b) => b.f - a.f || b.oc - a.oc);
   const vres = contar(verifs, v => verifTxt[v.resultado]);
   return ctrl + semanal + `<p class="muted" style="margin:-4px 0 12px">Período: ${brData(ini)} a ${brData(fim)}</p>` + kpis + graficoDia + `
@@ -1479,8 +1516,8 @@ function tabInd() {
     <div class="tw"><table><thead><tr><th>#</th><th>Setor</th><th>Ocorrências</th><th>Críticas/altas</th><th>Resolvidas</th><th>Tempo médio</th></tr></thead><tbody>
     ${melhores.map((s, k) => `<tr><td>${k + 1}</td><td>${esc(s.n)}</td><td>${s.qt}</td><td>${s.crit}</td><td>${s.qt ? s.res : "—"}</td><td>${s.tempo == null ? "—" : fmt1(s.tempo) + " d"}</td></tr>`).join("")}</tbody></table></div></div>
   <div class="grid g2">
-    <div class="panel"><h2>Desempenho por auditor</h2>${audRows.length ? `<div class="tw"><table><thead><tr><th>Auditor</th><th>Rondas</th><th>Ocorrências</th><th>Conferências</th><th>Duração média</th></tr></thead><tbody>
-      ${audRows.map(r => `<tr><td>${esc(r.n)}</td><td>${r.f}</td><td>${r.oc}</td><td>${r.v}</td><td>${hm(r.dur)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Sem dados no período.</p>`}</div>
+    <div class="panel"><h2>Desempenho por auditor</h2>${audRows.length ? `<div class="tw"><table><thead><tr><th>Auditor</th><th>Rondas</th><th>Não fez</th><th>Ocorrências</th><th>Conferências</th><th>Duração média</th></tr></thead><tbody>
+      ${audRows.map(r => `<tr><td>${esc(r.n)}</td><td>${r.f}</td><td${r.nf ? ' style="color:var(--bad);font-weight:700"' : ""}>${r.nf}</td><td>${r.oc}</td><td>${r.v}</td><td>${hm(r.dur)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Sem dados no período.</p>`}</div>
     <div class="panel"><h2>Resultado das conferências</h2>${barras(vres.map(([l, v]) => [l, v, l === "Resolvido" ? "var(--ok)" : l === "Continua pendente" ? "var(--bad)" : "var(--warn)"]))}
       ${verifs.length ? `<p class="muted" style="font-size:14px">${verifs.length} conferência(s) no período · ${pct(verifs.filter(v => v.resultado === "resolvido").length, verifs.length)} resolvidas na conferência</p>` : ""}</div>
   </div>`;
@@ -1604,11 +1641,40 @@ async function carregarProg() {
   const seg = segundaDe(S.progRef), auds = await audsEntre(seg, addDias(seg, 4));
   S.progAuds = {};
   auds.forEach(a => (S.progAuds[a.data] ||= []).push(a));
+  await carregarCiclo();
+}
+async function carregarCiclo() {
+  const pool = poolRodizio(), lista = await todasAtribuicoes();
+  if (!pool.length || !lista.length) { S.ciclo = null; return; }
+  const ciclos = montarCiclos(lista, pool);
+  const refData = lista.filter(a => a.data <= S.hoje).map(a => a.data).pop() || lista[0].data;
+  const c = ciclos.find(x => [...x.itens.values()].some(a => a.data === refData)) || ciclos[ciclos.length - 1];
+  const datas = [...c.itens.values()].map(a => a.data).sort();
+  const auds = datas.length ? await audsEntre(datas[0], datas[datas.length - 1]) : [];
+  S.ciclo = { numero: c.numero, linhas: pool.map(col => {
+    const a = c.itens.get(col.id);
+    if (!a) return { col, st: "falta" };
+    const fin = auds.some(x => x.data === a.data && x.status === "finalizada");
+    const st = a.data > S.hoje ? "programado" : a.data === S.hoje ? (fin ? "fez" : "hoje") : fin ? "fez" : "naofez";
+    return { col, a, st };
+  }) };
+}
+// depois de uma troca, refaz os dias futuros não iniciados (menos os escolhidos à mão) para o ciclo continuar certo
+async function refazerFuturos(depoisDe) {
+  const lista = await todasAtribuicoes();
+  const fut = lista.filter(a => a.data > depoisDe && a.data >= S.hoje && !a.manual);
+  if (fut.length) {
+    const iniciados = new Set((await audsEntre(fut[0].data, fut[fut.length - 1].data)).map(a => a.data));
+    const b = writeBatch(db); let n = 0;
+    fut.forEach(a => { if (!iniciados.has(a.data)) { b.delete(doc(db, "atribuicoes", a.data)); n++; } });
+    if (n) await b.commit();
+  }
 }
 async function trocarResponsavel(data, colabId) {
   const c = S.colabs.find(x => x.id === colabId);
   if (!c) return;
-  await setDoc(doc(db, "atribuicoes", data), { data, dia_semana: DIAS[dow(data)], colaborador_id: c.id, colaborador_nome: c.nome, alterado_por: S.adminNome, alterado_em: nowISO() }, { merge: true });
+  await setDoc(doc(db, "atribuicoes", data), { data, dia_semana: DIAS[dow(data)], colaborador_id: c.id, colaborador_nome: c.nome, manual: true, alterado_por: S.adminNome, alterado_em: nowISO() }, { merge: true });
+  await refazerFuturos(data);
   await carregarProg();
   S.semana = await getProgramacaoSemana(S.hoje);
   S.atrib = S.semana.find(d => d.data === S.hoje)?.atrib || null;
@@ -1617,15 +1683,28 @@ async function trocarResponsavel(data, colabId) {
 async function refazerSorteio() {
   const livres = S.progDias.filter(d => d.data >= S.hoje && !(S.progAuds[d.data] || []).length);
   if (!livres.length) throw falha("Nenhum dia desta semana pode ser sorteado (já passaram ou já começaram).");
-  if (!confirm(`Refazer o sorteio para ${livres.length} dia(s) ainda não iniciados desta semana?`)) return;
+  if (!confirm(`Refazer o sorteio para ${livres.length} dia(s) ainda não iniciados desta semana? O sorteio respeita o ciclo: só entra quem ainda não fez.`)) return;
   const pool = [...poolRodizio()];
   if (!pool.length) throw falha("Nenhum colaborador ativo.");
-  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  const embaralhar = arr => { const x = [...arr]; for (let i = x.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [x[i], x[j]] = [x[j], x[i]]; } return x; };
+  // sorteia só entre quem ainda não fez no ciclo; quando acabar, abre ciclo novo (todos de novo)
+  const lista = await todasAtribuicoes(), primeiro = livres[0].data;
+  const est = estadoCiclo(lista.filter(a => a.data < primeiro), pool);
+  let fila = embaralhar(est.completo ? pool : pool.filter(c => !est.feitos.has(c.id)));
+  const recentes = lista.filter(a => a.data < primeiro).map(a => a.colaborador_id);
+  // ciclo novo sorteado, mas quem fez por último vai para o fim da fila (não repete logo em seguida)
+  const novoCiclo = () => { const r = recentes.slice(-Math.max(1, Math.floor(pool.length / 2))); return embaralhar(pool).sort((x, y) => r.lastIndexOf(x.id) - r.lastIndexOf(y.id)); };
+  if (est.completo) fila = novoCiclo();
   const b = writeBatch(db);
-  livres.forEach((d, i) => {
-    const c = pool[i % pool.length];
-    b.set(doc(db, "atribuicoes", d.data), { data: d.data, dia_semana: DIAS[dow(d.data)], colaborador_id: c.id, colaborador_nome: c.nome, alterado_por: S.adminNome, alterado_em: nowISO(), sorteio: true }, { merge: true });
+  livres.forEach(d => {
+    if (!fila.length) fila = novoCiclo();
+    const c = fila.shift();
+    recentes.push(c.id);
+    b.set(doc(db, "atribuicoes", d.data), { data: d.data, dia_semana: DIAS[dow(d.data)], colaborador_id: c.id, colaborador_nome: c.nome, manual: false, alterado_por: S.adminNome, alterado_em: nowISO(), sorteio: true }, { merge: true });
   });
+  // dias de semanas seguintes ainda não iniciados são refeitos a partir do novo sorteio
+  const ultimoLivre = livres[livres.length - 1].data;
+  lista.filter(a => a.data > ultimoLivre && !a.manual).forEach(a => b.delete(doc(db, "atribuicoes", a.data)));
   await b.commit();
   await carregarProg();
   S.semana = await getProgramacaoSemana(S.hoje);
@@ -1867,12 +1946,22 @@ function telaAdmin() {
   return seed + `<div class="tabs">${tabs.map(([k, l]) => `<button data-act="atab" data-v="${k}" class="${S.adminTab === k ? "on" : ""}">${l}</button>`).join("")}</div>${body[S.adminTab]()}`;
 }
 
+function painelCiclo() {
+  const c = S.ciclo;
+  if (!c) return "";
+  const cont = k => c.linhas.filter(l => l.st === k).length;
+  const rot = { fez: l => `✓ fez ${brData(l.a.data).slice(0, 5)}`, naofez: l => `✗ não fez ${brData(l.a.data).slice(0, 5)}`, hoje: () => "hoje", programado: l => `programado ${brData(l.a.data).slice(0, 5)}`, falta: () => "falta fazer" };
+  const cls = { fez: "b-ok", naofez: "b-alta", hoje: "b-pend", programado: "b-baixa", falta: "b-neutral" };
+  return `<div class="ciclo"><div class="row"><b class="cond" style="font-size:18px">Ciclo ${c.numero}</b><span class="muted s">${cont("fez")} fizeram · ${cont("naofez")} não fizeram · ${cont("hoje") + cont("programado")} programados · ${cont("falta")} faltam</span></div>
+  <div class="ciclo-lista">${c.linhas.map(l => `<span class="badge ${cls[l.st]}">${esc(l.col.nome)}: ${rot[l.st](l)}</span>`).join("")}</div></div>`;
+}
 function admProg() {
   if (!S.progDias.length) return `<div class="panel">Carregando programação…</div>`;
   const seg = segundaDe(S.progRef);
   const opts = sel => poolRodizio().concat(S.colabs.filter(c => c.ativo && c.fixo && !poolRodizio().includes(c))).map(c => `<option value="${c.id}" ${c.id === sel ? "selected" : ""}>${esc(c.nome)}${c.fixo ? " (fixo)" : ""}</option>`).join("");
   return `<div class="panel"><div class="row"><button class="btn sm" data-act="semana" data-v="-7">‹</button><h2 style="margin:0">Semana de ${brData(seg)}</h2><button class="btn sm" data-act="semana" data-v="7">›</button><button class="btn sm sp" data-act="sorteio">Refazer sorteio</button></div>
-  <p class="muted">O responsável de cada dia fica gravado assim que é definido. Atualizar a página não sorteia de novo.</p>
+  <p class="muted">O responsável de cada dia fica gravado assim que é definido. Atualizar a página não sorteia de novo. Ninguém repete a ronda antes de todos do rodízio fazerem a sua.</p>
+  ${painelCiclo()}
   ${semanaHtml(S.progDias, S.progAuds)}
   <div class="tw" style="margin-top:12px"><table><thead><tr><th>Dia</th><th>Responsável</th><th>Situação</th></tr></thead><tbody>
   ${S.progDias.map(d => {
