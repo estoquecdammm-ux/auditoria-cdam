@@ -174,6 +174,20 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .month .c.today-c{border:2px solid var(--yellow)}
 .nav a#navSair{opacity:.6}
 .credito{text-align:center;font-size:10px;opacity:.18;margin-top:32px;color:var(--muted)}
+
+.fslot{width:112px;height:112px;border:2px dashed var(--line);border-radius:10px;background:var(--surface-2);position:relative;overflow:hidden;padding:0;display:grid;place-items:center;font-weight:600;font-size:13px;color:var(--muted)}
+.fslot img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.fslot.ok{border-style:solid;border-color:var(--ok)}
+.fslot.ok span{position:absolute;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);color:#fff;padding:2px}
+.thumb{border:1px solid var(--line);background:var(--surface-2);border-radius:8px;padding:0;width:84px;overflow:hidden}
+.thumb img{width:100%;height:84px;object-fit:cover;display:block;background:var(--surface-2)}
+.thumb span{font-size:11px;display:block;padding:2px 4px;color:var(--muted)}
+.thumb.sem img{visibility:hidden}
+.fotobig img{max-width:100%;border-radius:10px;display:block;margin:0 auto}
+.pend.oc-resolvida{border-left-color:var(--ok)}
+.pend.oc-em_analise{border-left-color:var(--info)}
+.pend.oc-cancelada{border-left-color:var(--line);opacity:.8}
+.pend.oc .s{margin-top:2px}
 </style>
 </head>
 <body>
@@ -189,6 +203,7 @@ body.busy .btn{pointer-events:none;opacity:.7}
 <p class="credito">Mateus Przibiovicz</p>
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
+<input type="file" id="fotoInput" accept="image/*" capture="environment" hidden>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
@@ -237,6 +252,7 @@ const S = {
   audsHoje: [], aud: null, audSet: [],
   mes: todayStr().slice(0, 7), mesAuds: [], mesAtrib: {},
   progRef: todayStr(), progDias: [], progAuds: {},
+  ocsHoje: [], emAnalise: [],
   busy: false,
 };
 const $ = s => document.querySelector(s);
@@ -244,6 +260,11 @@ const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": 
 function toast(m) { const t = $("#toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 2600); }
 const porOrdem = (a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || String(a.nome).localeCompare(String(b.nome));
 const stTxt = { pendente: "Pendente", em_andamento: "Em andamento", concluido: "Concluído" };
+const gravTxt = { baixa: "Baixa", media: "Média", alta: "Alta", critica: "Crítica" };
+const ocStTxt = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada" };
+const ocStBadge = { em_analise: "b-baixa", pendente: "b-pend", parcialmente_resolvida: "b-media", resolvida: "b-ok", cancelada: "b-neutral" };
+const acaoTxt = { resolvido_hora: "Resolvido na hora", encaminhado: "Encaminhado", nao_possivel: "Não foi possível" };
+const FOTO_CAMPOS = ["foto_antes_id", "foto_depois_id", "foto_solucao_id"];
 const audTxt = { em_andamento: "Em andamento", finalizada: "Finalizada", reiniciada: "Reiniciada" };
 
 async function acao(fn) {
@@ -306,7 +327,7 @@ const stDiaBadge = { ok: "b-ok", and: "b-pend", rei: "b-critica", nao: "b-alta",
 const atualDe = auds => auds.filter(a => a.status !== "reiniciada").sort((a, b) => String(b.horario_inicio).localeCompare(String(a.horario_inicio)))[0] || null;
 
 /* ================= ASSINATURAS EM TEMPO REAL ================= */
-let unsubs = [], unsubAud = null, unsubSet = null, audIdAssinado = null;
+let unsubs = [], unsubAud = null, unsubSet = null, unsubOcs = null, audIdAssinado = null;
 function assinarCadastros() {
   unsubs.forEach(u => u()); unsubs = [];
   const col = (nome, alvo) => new Promise(res => {
@@ -323,6 +344,11 @@ function assinarCadastros() {
       if (primeira) { primeira = false; res(); } else render();
     }, e => { console.error(e); res(); }));
   });
+  S.emAnalise = [];
+  if (S.isAdmin) unsubs.push(onSnapshot(query(collection(db, "ocorrencias"), where("status", "==", "em_analise")), snap => {
+    S.emAnalise = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.numero_seq - b.numero_seq);
+    render();
+  }, e => console.error(e)));
   return Promise.all([col("setores", "setores"), col("tipos", "tipos"), col("colaboradores", "colabs"), cfg]);
 }
 function assinarHoje() {
@@ -340,8 +366,13 @@ function assinarSetores(id) {
   if (id === audIdAssinado) return;
   audIdAssinado = id;
   if (unsubSet) { unsubSet(); unsubSet = null; }
-  S.audSet = [];
+  if (unsubOcs) { unsubOcs(); unsubOcs = null; }
+  S.audSet = []; S.ocsHoje = [];
   if (!id) return;
+  unsubOcs = onSnapshot(query(collection(db, "ocorrencias"), where("auditoria_id", "==", id)), snap => {
+    S.ocsHoje = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => b.numero_seq - a.numero_seq);
+    render();
+  }, e => console.error(e));
   unsubSet = onSnapshot(query(collection(db, "auditoria_setores"), where("auditoria_id", "==", id)), snap => {
     S.audSet = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort(porOrdem);
     render();
@@ -442,9 +473,9 @@ async function reiniciar() {
 async function excluirAuditoria(id) {
   if (!S.isAdmin) return;
   const a = [...S.audsHoje, ...S.mesAuds].find(x => x.id === id);
-  if (!confirm(`Excluir a auditoria ${a ? brData(a.data) + " de " + a.colaborador_nome : id}?\n\nApaga só esta auditoria e os registros dela (setores, ocorrências, conferências). Cadastros e outras auditorias não são afetados.`)) return;
+  if (!confirm(`Excluir a auditoria ${a ? brData(a.data) + " de " + a.colaborador_nome : id}?\n\nApaga só esta auditoria e os registros dela (setores, ocorrências, fotos, conferências). Cadastros e outras auditorias não são afetados.`)) return;
   const refs = [];
-  for (const col of ["auditoria_setores", "ocorrencias", "verificacoes"]) {
+  for (const col of ["auditoria_setores", "ocorrencias", "verificacoes", "fotos"]) {
     const snap = await getDocs(query(collection(db, col), where("auditoria_id", "==", id)));
     snap.docs.forEach(d => refs.push(d.ref));
   }
@@ -457,6 +488,184 @@ async function excluirAuditoria(id) {
   S.mesAuds = S.mesAuds.filter(x => x.id !== id);
   S.view = "main";
   toast("Auditoria excluída");
+}
+
+/* ================= OCORRÊNCIAS ================= */
+function comprimir(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const w = Math.round(img.width * k), h = Math.round(img.height * k);
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(img, 0, 0, w, h);
+      let q = 0.72, out = c.toDataURL("image/jpeg", q);
+      while (out.length > 700000 && q > 0.35) { q -= 0.1; out = c.toDataURL("image/jpeg", q); }
+      res(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(falha("Não foi possível ler a imagem.")); };
+    img.src = url;
+  });
+}
+const fotoProm = {};
+function carregarFoto(id) {
+  return fotoProm[id] ||= getDoc(doc(db, "fotos", id)).then(s => s.exists() ? s.data().data : "").catch(() => "");
+}
+function hydrateFotos() {
+  document.querySelectorAll("img[data-foto]").forEach(img => {
+    carregarFoto(img.dataset.foto).then(src => { if (src && img.getAttribute("src") !== src) img.src = src; else if (!src) img.closest(".thumb")?.classList.add("sem"); });
+  });
+}
+
+let F = null;
+function modalRegistrar() {
+  const s = S.audSet.find(x => x.id === S.setorAtual);
+  if (!s || !S.aud) return;
+  F = { grav: "media", acao: "encaminhado", fotos: {}, setor: s };
+  const chips = (k, pares, atual) => `<div class="chips">${pares.map(([v, l]) => `<button type="button" data-act="chip" data-k="${k}" data-v="${v}" class="${v === atual ? "on" : ""}">${l}</button>`).join("")}</div>`;
+  abrirModal(`<h2>Registrar ocorrência</h2>
+  <div class="auto">${esc(s.setor_nome)} · auditor ${esc(S.aud.colaborador_nome)} · data e hora registradas automaticamente</div>
+  <div class="field"><label for="oTipo">Tipo *</label><select id="oTipo"><option value="">Escolha…</option>${S.tipos.filter(t => t.ativo).map(t => `<option>${esc(t.nome)}</option>`).join("")}</select></div>
+  <div class="grid g2" style="gap:8px"><div class="field"><label for="oCod">Código do produto</label><input id="oCod" placeholder="Ex.: 57087.162.0/2" autocapitalize="none"></div>
+  <div class="field"><label for="oPDesc">Descrição do produto</label><input id="oPDesc"></div></div>
+  <div class="field"><label for="oLocal">Local / endereço</label><input id="oLocal" placeholder="Ex.: 3A203605" autocapitalize="characters"></div>
+  <div class="field"><label for="oDesc">O que foi encontrado *</label><textarea id="oDesc" rows="2"></textarea></div>
+  <div class="field"><label>Gravidade</label>${chips("grav", [["baixa", "Baixa"], ["media", "Média"], ["alta", "Alta"], ["critica", "Crítica"]], "media")}</div>
+  <div class="field"><label>Ação realizada</label>${chips("acao", [["resolvido_hora", "Resolvido na hora"], ["encaminhado", "Encaminhado"], ["nao_possivel", "Não foi possível"]], "encaminhado")}</div>
+  <div class="field"><label>Fotos</label><div class="row">
+    <button type="button" class="fslot" data-act="foto" data-v="antes"><img alt="" hidden><span id="lbAntes">Foto antes</span></button>
+    <button type="button" class="fslot" data-act="foto" data-v="depois"><img alt="" hidden><span id="lbDepois">Foto depois</span></button></div></div>
+  <div class="field"><label for="oResp" id="lbResp">Responsável</label><input id="oResp" placeholder="Quem vai tratar"></div>
+  <div class="field"><label for="oObs">Observação</label><input id="oObs"></div>
+  <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-oc">Salvar ocorrência</button></div>`);
+  atualizarObrigatorios();
+}
+function atualizarObrigatorios() {
+  if (!F) return;
+  const fotoObr = S.config.foto_obrigatoria !== false;
+  $("#lbAntes").textContent = "Foto antes" + (fotoObr ? " *" : "");
+  $("#lbDepois").textContent = "Foto depois" + (F.acao === "resolvido_hora" ? " *" : "");
+  $("#lbResp").textContent = "Responsável" + (F.acao === "encaminhado" ? " *" : "");
+}
+async function receberFoto(file) {
+  if (!file || !F) return;
+  const alvo = F.alvo, url = await comprimir(file);
+  F.fotos[alvo] = url;
+  const slot = document.querySelector(`.fslot[data-v="${alvo}"]`);
+  if (slot) { const im = slot.querySelector("img"); im.src = url; im.hidden = false; slot.classList.add("ok"); }
+}
+async function salvarOcorrencia() {
+  if (!F) return;
+  const v = id => $("#" + id).value.trim();
+  const dd = { tipo: v("oTipo"), cod: v("oCod"), pdesc: v("oPDesc"), local: v("oLocal").toUpperCase(), desc: v("oDesc"), resp: v("oResp"), obs: v("oObs") };
+  if (!dd.tipo) throw falha("Escolha o tipo da ocorrência.");
+  if (!dd.desc) throw falha("Descreva o que foi encontrado.");
+  if (S.config.foto_obrigatoria !== false && !F.fotos.antes) throw falha("Tire a foto antes.");
+  if (F.acao === "resolvido_hora" && !F.fotos.depois) throw falha("Com “Resolvido na hora”, a foto depois é obrigatória.");
+  if (F.acao === "encaminhado" && !dd.resp) throw falha("Informe para quem foi encaminhado.");
+  const aud = S.aud, set = F.setor, agora = nowISO(), resolv = F.acao === "resolvido_hora";
+  // reincidência: mesmo tipo + mesmo setor nos últimos 10 dias
+  const lim = addDias(S.hoje, -10);
+  const prev = (await getDocs(query(collection(db, "ocorrencias"), where("setor_id", "==", set.setor_id)))).docs.map(d => d.data())
+    .filter(o => o.tipo_ocorrencia === dd.tipo && o.auditoria_data >= lim && o.status !== "cancelada")
+    .sort((a, b) => b.numero_seq - a.numero_seq)[0];
+  const cRef = doc(db, "contadores", "ocorrencias"), audRef = doc(db, "auditorias", aud.id), setRef = doc(db, "auditoria_setores", set.id);
+  const ocRef = doc(collection(db, "ocorrencias"));
+  const fotoRefs = { antes: F.fotos.antes ? doc(collection(db, "fotos")) : null, depois: F.fotos.depois ? doc(collection(db, "fotos")) : null };
+  let numero = "";
+  await runTransaction(db, async tx => {
+    const c = await tx.get(cRef), a = await tx.get(audRef), st = await tx.get(setRef);
+    if (a.data()?.status !== "em_andamento") throw falha("Esta auditoria não está mais em andamento.");
+    if (st.data()?.status === "concluido") throw falha("Este setor já foi concluído.");
+    const seq = (c.exists() ? c.data().ultimo || 0 : 0) + 1;
+    numero = "#" + String(seq).padStart(6, "0");
+    for (const k of ["antes", "depois"]) if (fotoRefs[k])
+      tx.set(fotoRefs[k], { data: F.fotos[k], tipo: k, ocorrencia_id: ocRef.id, ocorrencia_numero: numero, auditoria_id: aud.id, criado_em: agora });
+    tx.set(ocRef, {
+      numero, numero_seq: seq, auditoria_id: aud.id, auditoria_data: aud.data,
+      setor_id: set.setor_id, setor_nome: set.setor_nome, auditoria_setor_id: set.id,
+      tipo_ocorrencia: dd.tipo, produto_codigo: dd.cod, produto_descricao: dd.pdesc, local: dd.local, descricao: dd.desc,
+      gravidade: F.grav, foto_antes_id: fotoRefs.antes?.id || null, foto_depois_id: fotoRefs.depois?.id || null,
+      acao_realizada: F.acao, responsavel: dd.resp, observacao: dd.obs,
+      status: resolv ? "resolvida" : "em_analise",
+      auditor_id: aud.colaborador_id, auditor_nome: aud.colaborador_nome, registrado_em: agora, registrado_por_uid: S.user.uid,
+      reincidencia: !!prev, reincidencia_de: prev?.numero || null,
+      data_resolucao: resolv ? agora : null, resolvido_por_nome: resolv ? aud.colaborador_nome : null,
+      descricao_solucao: resolv ? "Resolvido na hora da auditoria" : null,
+      fotos_apagadas: false, criado_ts: serverTimestamp(),
+    });
+    tx.set(cRef, { ultimo: seq });
+    tx.update(audRef, { total_ocorrencias: (a.data().total_ocorrencias || 0) + 1 });
+    tx.update(setRef, { ocorrencias_count: (st.data().ocorrencias_count || 0) + 1 });
+  });
+  fechar(); F = null;
+  toast(`Ocorrência ${numero} registrada` + (prev ? ` · reincidência de ${prev.numero}` : ""));
+}
+async function excluirOcorrencia(id) {
+  const o = [...S.ocsHoje, ...S.emAnalise].find(x => x.id === id);
+  if (!o || !S.isAdmin) return;
+  if (!confirm(`Excluir a ocorrência ${o.numero}? Não dá para desfazer.`)) return;
+  const aRef = doc(db, "auditorias", o.auditoria_id), sRef = doc(db, "auditoria_setores", o.auditoria_setor_id);
+  await runTransaction(db, async tx => {
+    const a = await tx.get(aRef), s = await tx.get(sRef);
+    FOTO_CAMPOS.forEach(k => { if (o[k]) tx.delete(doc(db, "fotos", o[k])); });
+    tx.delete(doc(db, "ocorrencias", id));
+    if (a.exists()) tx.update(aRef, { total_ocorrencias: Math.max(0, (a.data().total_ocorrencias || 1) - 1) });
+    if (s.exists()) tx.update(sRef, { ocorrencias_count: Math.max(0, (s.data().ocorrencias_count || 1) - 1) });
+  });
+  toast(`Ocorrência ${o.numero} excluída`);
+}
+async function analiseConfirmar(id) {
+  await updateDoc(doc(db, "ocorrencias", id), { status: "pendente", analisado_por: S.adminNome, analisado_em: nowISO() });
+  toast("Confirmada como pendência");
+}
+async function analiseCancelar(id) {
+  const o = S.emAnalise.find(x => x.id === id);
+  const j = prompt(`Cancelar ${o?.numero}. Justificativa (obrigatória):`);
+  if (j === null) return;
+  if (!j.trim()) throw falha("A justificativa é obrigatória para cancelar.");
+  await updateDoc(doc(db, "ocorrencias", id), { status: "cancelada", cancelado_por_nome: S.adminNome, cancelado_por_uid: S.user.uid, data_cancelamento: nowISO(), justificativa: j.trim() });
+  toast("Ocorrência cancelada");
+}
+let limpezaFeita = false;
+async function limparFotosAntigas() {
+  if (limpezaFeita || !S.isAdmin) return;
+  limpezaFeita = true;
+  const corte = addDias(S.hoje, -90);
+  let n = 0;
+  for (const st of ["resolvida", "cancelada"]) {
+    const snap = await getDocs(query(collection(db, "ocorrencias"), where("status", "==", st), where("fotos_apagadas", "==", false)));
+    for (const d of snap.docs) {
+      const o = d.data(), quando = String(o.data_resolucao || o.data_cancelamento || "").slice(0, 10);
+      if (!quando || quando >= corte) continue;
+      const b = writeBatch(db);
+      FOTO_CAMPOS.forEach(k => { if (o[k]) b.delete(doc(db, "fotos", o[k])); });
+      b.update(d.ref, { fotos_apagadas: true, fotos_apagadas_em: nowISO() });
+      await b.commit(); n++;
+    }
+  }
+  if (n) toast(`Limpeza: fotos de ${n} ocorrência(s) antigas removidas`);
+}
+function ocCard(o, extra = "") {
+  const fotos = o.fotos_apagadas ? [] : [["foto_antes_id", "Antes"], ["foto_depois_id", "Depois"], ["foto_solucao_id", "Solução"]].filter(([k]) => o[k]);
+  const quando = (o.auditoria_data !== S.hoje ? brData(o.auditoria_data) + " " : "") + horaDe(o.registrado_em);
+  return `<div class="pend oc oc-${o.status}">
+    <div class="row"><span class="num">${esc(o.numero)}</span><span class="badge b-${o.gravidade}">${gravTxt[o.gravidade]}</span><span class="badge ${ocStBadge[o.status]}">${ocStTxt[o.status]}</span>${o.reincidencia ? `<span class="badge b-critica">Reincidência de ${esc(o.reincidencia_de)}</span>` : ""}<span class="s muted sp">${quando}</span></div>
+    <div class="t" style="margin-top:6px">${esc(o.tipo_ocorrencia)} · ${esc(o.setor_nome)}</div>
+    ${o.produto_codigo || o.produto_descricao ? `<div class="s">Produto: ${esc([o.produto_codigo, o.produto_descricao].filter(Boolean).join(" · "))}</div>` : ""}
+    ${o.local ? `<div class="s">Local: ${esc(o.local)}</div>` : ""}
+    <div class="s">${esc(o.descricao)}</div>
+    <div class="s muted">${acaoTxt[o.acao_realizada] || ""}${o.responsavel ? " · Responsável: " + esc(o.responsavel) : ""} · Auditor: ${esc(o.auditor_nome)}</div>
+    ${o.observacao ? `<div class="s muted">Obs.: ${esc(o.observacao)}</div>` : ""}
+    ${o.justificativa ? `<div class="s muted">Cancelada por ${esc(o.cancelado_por_nome)}: ${esc(o.justificativa)}</div>` : ""}
+    ${fotos.length ? `<div class="row" style="margin-top:8px">${fotos.map(([k, l]) => `<button class="thumb" data-act="ver-foto" data-id="${o[k]}" data-l="${esc(o.numero)} · ${l}"><img data-foto="${o[k]}" alt="Foto ${l}"><span>${l}</span></button>`).join("")}</div>` : o.fotos_apagadas ? `<div class="s muted">Fotos removidas após 90 dias</div>` : ""}
+    ${extra}</div>`;
+}
+async function verFoto(id, legenda) {
+  abrirModal(`<h2>${esc(legenda)}</h2><div class="fotobig"><img alt="" id="fotoBig"></div><div class="row" style="margin-top:12px"><button class="btn sp" data-act="fechar">Fechar</button></div>`);
+  const src = await carregarFoto(id);
+  const im = $("#fotoBig"); if (im) { if (src) im.src = src; else im.replaceWith(Object.assign(document.createElement("p"), { className: "muted", textContent: "Foto não encontrada." })); }
 }
 
 /* ================= ADMIN: LOGIN ================= */
@@ -551,6 +760,7 @@ async function carregarMes() {
 
 /* ================= RENDER ================= */
 function render() {
+  queueMicrotask(hydrateFotos);
   document.body.classList.toggle("exec", S.modo === "exec" && S.view !== "admin");
   document.querySelectorAll("#modeBox button").forEach(b => b.classList.toggle("on", b.dataset.v === S.modo));
   $("#navMain").classList.toggle("on", S.view !== "admin");
@@ -596,8 +806,8 @@ function tabHoje() {
 
   const setHtml = a ? `<div class="panel"><h2>Setores</h2>
     <div class="prog"><div class="row"><span>Setores concluídos</span><span class="sp">${concl}/${tot}</span></div><div class="bar"><i style="width:${tot ? concl / tot * 100 : 0}%"></i></div></div>
-    ${S.audSet.map(s => `<div class="item"><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""}</div></div>
-      ${a.status === "em_andamento" ? `<button class="btn sm exec-only sp" data-act="abrir-setor" data-id="${s.id}">Abrir setor</button>` : ""}</div>`).join("")}
+    ${S.audSet.map(s => `<div class="item"><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""} · ${s.ocorrencias_count || 0} ocorrência${s.ocorrencias_count === 1 ? "" : "s"}</div></div>
+      <button class="btn sm sp" data-act="abrir-setor" data-id="${s.id}">${a.status === "em_andamento" && s.status !== "concluido" && S.modo === "exec" ? "Abrir setor" : "Ver"}</button></div>`).join("")}
     ${a.status === "em_andamento" ? `<div style="margin-top:14px" class="exec-only"><button class="btn primary block" data-act="finalizar" ${podeFinalizar() ? "" : "disabled"}>Finalizar auditoria</button>
       ${podeFinalizar() ? "" : '<p class="muted" style="text-align:center;margin:6px 0 0;font-size:14px">Conclua todos os setores para liberar.</p>'}</div>` : ""}
   </div>` : `<div class="panel"><h2>Setores</h2><p class="muted">A lista aparece quando a auditoria for iniciada.</p>${S.setores.filter(s => s.ativo).map(s => `<div class="item"><span class="dot"></span><div class="t">${esc(s.nome)}</div></div>`).join("")}</div>`;
@@ -612,11 +822,14 @@ function telaSetor() {
   const s = S.audSet.find(x => x.id === S.setorAtual);
   if (!s) { S.view = "main"; return ""; }
   const aberto = S.aud?.status === "em_andamento" && s.status !== "concluido";
+  const ocs = S.ocsHoje.filter(o => o.auditoria_setor_id === s.id);
   return `<button class="back" data-act="voltar">‹ Voltar para a auditoria</button>
   <section class="hero" style="padding:16px 20px"><div class="date">Setor · ${stTxt[s.status]}${s.horario_inicio ? " · aberto às " + horaDe(s.horario_inicio) : ""}</div><div class="who" style="font-size:clamp(32px,7vw,48px)">${esc(s.setor_nome)}</div></section>
-  ${aberto ? `<div class="row" style="margin-bottom:16px"><button class="btn primary exec-only" data-act="msg" data-m="O registro de ocorrências chega na fase 2">Registrar ocorrência</button><button class="btn dark exec-only" data-act="concluir-setor">Concluir setor</button></div>`
+  ${aberto ? `<div class="row" style="margin-bottom:16px"><button class="btn primary exec-only" data-act="registrar">Registrar ocorrência</button><button class="btn dark exec-only" data-act="concluir-setor">Concluir setor</button></div>`
       : s.status === "concluido" ? `<div class="note">Setor concluído às ${horaDe(s.horario_conclusao)}. Não aceita novas ocorrências.</div>` : ""}
-  <div class="panel"><h2>Ocorrências neste setor</h2><p class="muted">O registro de ocorrências com fotos chega na fase 2.</p></div>`;
+  <div class="panel"><h2>Ocorrências neste setor (${ocs.length})</h2>
+  ${ocs.length ? ocs.map(o => ocCard(o, S.isAdmin ? `<div class="row" style="margin-top:8px"><button class="btn sm danger exec-only" data-act="del-oc" data-id="${o.id}">Excluir ocorrência</button></div>` : "")).join("")
+      : `<p class="muted">${aberto ? "Nenhuma ocorrência registrada. Se o setor estiver em ordem, conclua o setor." : "Nenhuma ocorrência registrada neste setor."}</p>`}</div>`;
 }
 
 function tabDias() {
@@ -657,7 +870,7 @@ function telaLogin() {
 }
 
 function telaAdmin() {
-  const tabs = [["prog", "Programação"], ["ctrl", "Controle diário"], ["ind", "Indicadores"], ["hist", "Histórico"], ["set", "Setores"], ["tip", "Tipos"], ["col", "Colaboradores"], ["cfg", "Configuração"]];
+  const tabs = [["prog", "Programação"], ["ctrl", "Controle diário" + (S.emAnalise.length ? ` (${S.emAnalise.length})` : "")], ["ind", "Indicadores"], ["hist", "Histórico"], ["set", "Setores"], ["tip", "Tipos"], ["col", "Colaboradores"], ["cfg", "Configuração"]];
   const vazio = !S.setores.length || !S.tipos.length;
   const seed = vazio ? `<div class="note" style="margin-top:16px">Ainda não há ${!S.setores.length ? "setores" : ""}${!S.setores.length && !S.tipos.length ? " nem " : ""}${!S.tipos.length ? "tipos de ocorrência" : ""} cadastrados. <button class="btn sm primary" data-act="padrao">Criar lista padrão</button></div>` : "";
   const body = {
@@ -682,13 +895,18 @@ function admProg() {
   }).join("")}</tbody></table></div></div>`;
 }
 
+function admAnalise() {
+  const l = S.emAnalise;
+  return `<div class="panel"><h2>Ocorrências em análise (${l.length})</h2><p class="muted">Encaminhadas ou não resolvidas na hora. Confirme para virar pendência, que entra na conferência da próxima auditoria, ou cancele com justificativa.</p>
+  ${l.length ? l.map(o => ocCard(o, `<div class="row" style="margin-top:8px"><button class="btn sm primary" data-act="analise-ok" data-id="${o.id}">Confirmar pendência</button><button class="btn sm danger" data-act="analise-cancel" data-id="${o.id}">Cancelar</button><button class="btn sm sp" data-act="del-oc" data-id="${o.id}">Excluir</button></div>`)).join("") : `<p class="muted">Nada aguardando análise.</p>`}</div>`;
+}
 function admCtrl() {
   const a = S.aud;
-  if (!a) return `<div class="panel"><h2>Controle diário · ${brData(S.hoje)}</h2><p>Auditoria de hoje ainda não iniciada.</p><p class="muted">Responsável: ${esc(S.atrib?.colaborador_nome || "—")}</p></div>`;
-  return `<div class="panel"><h2>Controle diário · ${brData(S.hoje)}</h2>
-  <div class="kpis"><div class="kpi"><b>${esc(a.colaborador_nome)}</b><span>Auditor</span></div><div class="kpi"><b>${audTxt[a.status]}</b><span>Status</span></div><div class="kpi"><b>${horaDe(a.horario_inicio)}</b><span>Início</span></div><div class="kpi"><b>${horaDe(a.horario_finalizacao)}</b><span>Finalização</span></div></div>
-  <div class="tw"><table><thead><tr><th>Setor</th><th>Status</th><th>Abertura</th><th>Conclusão</th></tr></thead><tbody>
-  ${S.audSet.map(s => `<tr><td>${esc(s.setor_nome)}</td><td>${stTxt[s.status]}</td><td>${horaDe(s.horario_inicio)}</td><td>${horaDe(s.horario_conclusao)}</td></tr>`).join("")}</tbody></table></div>
+  if (!a) return admAnalise() + `<div class="panel"><h2>Controle diário · ${brData(S.hoje)}</h2><p>Auditoria de hoje ainda não iniciada.</p><p class="muted">Responsável: ${esc(S.atrib?.colaborador_nome || "—")}</p></div>`;
+  return admAnalise() + `<div class="panel"><h2>Controle diário · ${brData(S.hoje)}</h2>
+  <div class="kpis"><div class="kpi"><b>${esc(a.colaborador_nome)}</b><span>Auditor</span></div><div class="kpi"><b>${audTxt[a.status]}</b><span>Status</span></div><div class="kpi"><b>${horaDe(a.horario_inicio)}</b><span>Início</span></div><div class="kpi"><b>${horaDe(a.horario_finalizacao)}</b><span>Finalização</span></div><div class="kpi"><b>${a.total_ocorrencias || 0}</b><span>Ocorrências</span></div></div>
+  <div class="tw"><table><thead><tr><th>Setor</th><th>Status</th><th>Abertura</th><th>Conclusão</th><th>Ocorr.</th></tr></thead><tbody>
+  ${S.audSet.map(s => `<tr><td>${esc(s.setor_nome)}</td><td>${stTxt[s.status]}</td><td>${horaDe(s.horario_inicio)}</td><td>${horaDe(s.horario_conclusao)}</td><td>${s.ocorrencias_count || 0}</td></tr>`).join("")}</tbody></table></div>
   ${S.audsHoje.length > 1 ? `<p class="muted">Hoje já houve ${S.audsHoje.length - 1} reinício(s).</p>` : ""}
   <div class="row" style="margin-top:12px"><button class="btn sm" data-act="reiniciar">Reiniciar auditoria de hoje</button><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir auditoria de hoje</button></div></div>`;
 }
@@ -719,7 +937,7 @@ function admCfg() {
 
 /* ================= MODAL ================= */
 function abrirModal(html) { $("#sheet").innerHTML = html; $("#modal").classList.add("open"); }
-function fechar() { $("#modal").classList.remove("open"); }
+function fechar() { $("#modal").classList.remove("open"); F = null; }
 function modalFinalizar() {
   abrirModal(`<h2>Finalizar auditoria</h2><div class="auto">${S.audSet.length} setores concluídos · horário de finalização registrado automaticamente</div>
   <div class="field"><label for="fObs">Observação geral do dia</label><textarea id="fObs" rows="3" placeholder="Resumo da ronda"></textarea></div>
@@ -734,7 +952,7 @@ document.addEventListener("click", e => {
   if (el.tagName === "A") e.preventDefault();
   const d = el.dataset;
   switch (a) {
-    case "modo": S.modo = d.v; if (S.modo === "ver" && S.view === "setor") S.view = "main"; break;
+    case "modo": S.modo = d.v; break;
     case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); break;
     case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); break;
     case "go-main": S.view = "main"; break;
@@ -759,6 +977,14 @@ document.addEventListener("click", e => {
     case "padrao": return acao(criarPadrao);
     case "cfg": { const dados = { empresa_nome: $("#cfNome").value.trim(), empresa_subtitulo: $("#cfSub").value.trim(), foto_obrigatoria: $("#cfFoto").checked }; return acao(() => salvarConfig(dados)); }
     case "msg": return toast(d.m);
+    case "registrar": return modalRegistrar();
+    case "chip": { if (!F && d.k !== "x") return; F[d.k] = d.v; el.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === el)); if (d.k === "acao") atualizarObrigatorios(); return; }
+    case "foto": F.alvo = d.v; $("#fotoInput").value = ""; return $("#fotoInput").click();
+    case "salvar-oc": return acao(salvarOcorrencia);
+    case "del-oc": return acao(() => excluirOcorrencia(d.id));
+    case "analise-ok": return acao(() => analiseConfirmar(d.id));
+    case "analise-cancel": return acao(() => analiseCancelar(d.id));
+    case "ver-foto": return verFoto(d.id, d.l);
     default: return;
   }
   render();
@@ -772,7 +998,8 @@ document.addEventListener("change", e => {
   if (d.chg === "ativo" || d.chg === "fixo") return acao(() => updCad(d.k, d.id, { [d.chg]: el.checked }));
 });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && (e.target.id === "lgPass" || e.target.id === "lgUser")) $("[data-act=login]")?.click(); if (e.key === "Enter" && e.target.id === "novoNome") $("[data-act=add]")?.click(); });
-$("#modal").addEventListener("click", e => { if (e.target.id === "modal") fechar(); });
+$("#modal").addEventListener("click", e => { if (e.target.id === "modal" && !F) fechar(); });
+$("#fotoInput").addEventListener("change", e => { const f = e.target.files?.[0]; if (f) receberFoto(f).catch(err => toast(err.userMsg || "Erro ao processar a foto.")); });
 
 // virada do dia com a página aberta
 setInterval(() => { if (todayStr() !== S.hoje && S.pronto) acao(carregarDia); }, 60000);
@@ -792,6 +1019,7 @@ onAuthStateChanged(auth, async user => {
   try { await assinarCadastros(); await carregarDia(); S.pronto = true; }
   catch (e) { console.error(e); $("#app").innerHTML = `<div class="panel" style="margin-top:24px">Erro ao carregar: ${esc(e.code || e.message)}</div>`; return; }
   if (S.isAdmin && S.view === "admin" && S.adminTab === "prog") { try { await carregarProg(); } catch (e) { console.error(e); } }
+  if (S.isAdmin) limparFotosAntigas().catch(e => console.error(e));
   render();
 });
 render();
