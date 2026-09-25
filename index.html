@@ -222,6 +222,10 @@ body.busy .btn{pointer-events:none;opacity:.7}
 @media(max-width:560px){.week.w6{grid-template-columns:1fr}}
 .cfgsec{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}
 .cfgsec h3{font:700 19px "Barlow Condensed",sans-serif;margin:0 0 6px}
+.field input[type=checkbox]{width:auto;margin:0 6px 0 0;vertical-align:middle}
+.field label:has(input[type=checkbox]){display:flex;align-items:flex-start;gap:6px;font-weight:600}
+.field label:has(input[type=checkbox]) input{margin-top:3px}
+input.oculta{-webkit-text-security:disc}
 </style>
 </head>
 <body>
@@ -2194,8 +2198,8 @@ function admCfg() {
   <div class="cfgsec"><h3>E-mail dos relatórios</h3>
   <p class="muted" style="font-size:14px;margin-top:0">Ao finalizar a ronda, o relatório do dia vai por e-mail para a lista abaixo; no último dia da semana vai também o semanal. Sai da conta Google do Estoque (limite do Gmail: 100 destinatários por dia).</p>
   ${S.emailPriv === undefined ? `<p class="muted">Carregando…</p>` : `
-  <div class="field"><label for="cfEmailUrl">Endereço do script (termina em /exec)</label><input id="cfEmailUrl" autocomplete="off" value="${esc(S.formEmail?.url ?? c.email_url ?? "")}" placeholder="https://script.google.com/macros/s/…/exec"></div>
-  <div class="field"><label for="cfEmailChave">Chave de líder</label><input id="cfEmailChave" type="password" autocomplete="off" value="${esc(S.formEmail?.chave ?? S.emailPriv.chave_admin ?? "")}"></div>
+  <div class="field"><label for="cfEmailUrl">Endereço do script (termina em /exec)</label><input id="cfEmailUrl" type="url" name="endereco_script_email" autocomplete="off" data-lpignore="true" spellcheck="false" value="${esc(S.formEmail?.url ?? c.email_url ?? "")}" placeholder="https://script.google.com/macros/s/…/exec"></div>
+  <div class="field"><label for="cfEmailChave">Chave de líder</label><input id="cfEmailChave" type="text" class="oculta" name="chave_lider_email" autocomplete="off" data-lpignore="true" spellcheck="false" autocapitalize="none" value="${esc(S.formEmail?.chave ?? S.emailPriv.chave_admin ?? "")}"></div>
   <div class="field"><label for="cfEmailLista">Destinatários (um por linha)</label><textarea id="cfEmailLista" rows="4" placeholder="gerente@lojasmm.com.br">${esc(S.formEmail?.lista ?? (S.emailPriv.lista || []).join("\n"))}</textarea></div>
   <div class="row"><button class="btn primary" data-act="email-salvar">Salvar e-mail</button>${emailAtivo() ? `<button class="btn" data-act="email-teste">Enviar e-mail de teste</button><span class="badge b-ok">Ativo</span>` : `<span class="badge b-neutral">Desligado</span>`}</div>`}</div></div>`;
 }
