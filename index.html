@@ -213,6 +213,9 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .dica{font-size:13px;margin:-6px 0 10px;min-height:18px;color:var(--muted)}
 .dica[data-tipo="ok"]{color:var(--ok);font-weight:600}
 .dica[data-tipo="novo"]{color:var(--warn);font-weight:600}
+.mono{font-family:ui-monospace,Consolas,monospace}
+.panel.perigo{border:2px solid var(--bad)}
+.panel.perigo h2{color:var(--bad)}
 </style>
 </head>
 <body>
@@ -232,7 +235,7 @@ body.busy .btn{pointer-events:none;opacity:.7}
 <input type="file" id="fotoInput" accept="image/*" capture="environment" hidden>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut, initializeAuth, inMemoryPersistence, createUserWithEmailAndPassword, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, where, orderBy, limit, onSnapshot, runTransaction, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 const firebaseConfig = {
@@ -277,7 +280,7 @@ import("https://estoquecdammm-ux.github.io/produtos-cdam/produtos.mjs")
 
 /* ================= ESTADO ================= */
 const S = {
-  pronto: false, user: null, isAdmin: false, adminNome: "",
+  pronto: false, user: null, isAdmin: false, adminNome: "", oculto: false, trocaSenha: false, usuarios: null, contagens: null, formUsr: { nome: "", usuario: "", senha: "" },
   modo: "ver", view: "main", tab: "hoje", adminTab: "prog", setorAtual: null,
   setores: [], tipos: [], colabs: [], config: {},
   hoje: todayStr(), atrib: null, semana: [], semanaAuds: {},
@@ -1484,6 +1487,108 @@ function tabInd() {
 }
 const diasUteis = diaUtil;
 
+/* ================= USUÁRIOS DO PAINEL ================= */
+let authCriador = null;
+function authSecundaria() {
+  // conexão separada só para criar contas, sem deslogar o líder atual
+  if (!authCriador) authCriador = initializeAuth(initializeApp(firebaseConfig, "criar-usuarios"), { persistence: inMemoryPersistence });
+  return authCriador;
+}
+const USUARIO_OK = /^[a-z0-9][a-z0-9._-]{2,29}$/;
+async function carregarUsuarios() {
+  const snap = await getDocs(collection(db, "usuarios"));
+  S.usuarios = snap.docs.map(d => ({ uid: d.id, ...d.data() }))
+    .filter(u => u.perfil === "admin" && (!u.oculto || u.uid === S.user.uid))
+    .sort((a, b) => (a.ativo === false) - (b.ativo === false) || String(a.nome).localeCompare(String(b.nome)));
+}
+async function criarUsuario(nome, usuario, senha) {
+  nome = nome.trim().replace(/\s+/g, " "); usuario = usuario.trim().toLowerCase();
+  if (!nome) throw falha("Informe o nome do líder.");
+  if (!USUARIO_OK.test(usuario)) throw falha("Usuário: 3 a 30 caracteres, só letras minúsculas, números, ponto, hífen ou _ (ex.: joao.silva).");
+  if (String(senha).length < 6) throw falha("A senha inicial precisa ter pelo menos 6 caracteres.");
+  const sec = authSecundaria();
+  let cred;
+  try { cred = await createUserWithEmailAndPassword(sec, usuario + DOMINIO, senha); }
+  catch (e) {
+    if (e.code === "auth/email-already-in-use") throw falha("Já existe uma conta com esse usuário. Escolha outro (ex.: " + usuario + "2) ou reative a existente.");
+    if (e.code === "auth/weak-password") throw falha("Senha fraca: use pelo menos 6 caracteres.");
+    throw e;
+  }
+  await setDoc(doc(db, "usuarios", cred.user.uid), { perfil: "admin", nome, usuario, ativo: true, troca_senha: true, oculto: false, criado_por: S.adminNome, criado_em: nowISO() });
+  try { await signOut(sec); } catch (e) { /* conexão temporária */ }
+  S.formUsr = { nome: "", usuario: "", senha: "" };
+  await carregarUsuarios();
+  toast(`${nome} criado. No primeiro acesso, vai trocar a senha.`);
+}
+async function alternarUsuario(uid) {
+  const u = S.usuarios.find(x => x.uid === uid);
+  if (!u) return;
+  if (uid === S.user.uid) throw falha("Você não pode desativar a própria conta.");
+  const ativar = u.ativo === false;
+  if (!confirm(ativar ? `Reativar o acesso de ${u.nome}?` : `Desativar o acesso de ${u.nome}? Ele não vai mais conseguir entrar no painel. O histórico fica.`)) return;
+  await updateDoc(doc(db, "usuarios", uid), { ativo: ativar, [ativar ? "reativado_por" : "desativado_por"]: S.adminNome, [ativar ? "reativado_em" : "desativado_em"]: nowISO() });
+  await carregarUsuarios();
+  toast(ativar ? `${u.nome} reativado` : `${u.nome} desativado`);
+}
+function modalSenha(obrigatoria = false) {
+  F = { tipoModal: "senha", obrigatoria };
+  abrirModal(`<h2>${obrigatoria ? "Crie sua senha" : "Trocar minha senha"}</h2>
+  ${obrigatoria ? `<div class="note">Primeiro acesso: troque a senha inicial que o líder passou por uma só sua.</div>` : ""}
+  <div class="field"><label for="sAtual">${obrigatoria ? "Senha inicial" : "Senha atual"}</label><input id="sAtual" type="password" autocomplete="current-password"></div>
+  <div class="field"><label for="sNova">Nova senha (mínimo 6)</label><input id="sNova" type="password" autocomplete="new-password"></div>
+  <div class="field"><label for="sConf">Repita a nova senha</label><input id="sConf" type="password" autocomplete="new-password"></div>
+  <div class="row">${obrigatoria ? `<button class="btn" data-act="sair-forcado">Sair</button>` : `<button class="btn" data-act="fechar">Cancelar</button>`}<button class="btn primary sp" data-act="salvar-senha">Salvar senha</button></div>`);
+}
+async function salvarSenha() {
+  const atual = $("#sAtual").value, nova = $("#sNova").value, conf = $("#sConf").value;
+  if (!atual) throw falha("Informe a senha atual.");
+  if (nova.length < 6) throw falha("A nova senha precisa ter pelo menos 6 caracteres.");
+  if (nova !== conf) throw falha("As duas senhas novas não são iguais.");
+  if (nova === atual) throw falha("A nova senha precisa ser diferente da atual.");
+  const u = auth.currentUser;
+  try { await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, atual)); }
+  catch (e) { throw falha("Senha atual incorreta."); }
+  await updatePassword(u, nova);
+  await updateDoc(doc(db, "usuarios", u.uid), { troca_senha: false, senha_trocada_em: nowISO() });
+  S.trocaSenha = false;
+  fechar();
+  toast("Senha trocada");
+}
+
+/* ================= ZONA DE PERIGO (só conta oculta) ================= */
+const LIMPEZA = {
+  operacao: { rotulo: "Auditorias, ocorrências, conferências e fotos (a numeração volta para #000001)", cols: ["auditorias", "auditoria_setores", "ocorrencias", "verificacoes", "fotos", "contadores"], padrao: true },
+  rodizio: { rotulo: "Rodízio e programação dos dias (o sorteio recomeça do zero)", cols: ["atribuicoes"], padrao: true },
+  aprendidos: { rotulo: "Códigos aprendidos do cadastro de produtos (vale para todos os sistemas)", cols: ["produtos_aprendidos"], padrao: false },
+  cadastros: { rotulo: "Cadastros de setores, tipos de ocorrência e colaboradores", cols: ["setores", "tipos", "colaboradores"], padrao: false },
+};
+async function carregarContagens() {
+  const cols = [...new Set(Object.values(LIMPEZA).flatMap(g => g.cols))];
+  const res = await Promise.all(cols.map(c => getDocs(collection(db, c)).then(s => [c, s.size])));
+  S.contagens = Object.fromEntries(res);
+}
+async function limparDados(grupos) {
+  if (!S.oculto) throw falha("Só a conta principal pode limpar dados.");
+  if (!grupos.length) throw falha("Marque o que quer apagar.");
+  if (($("#confApagar")?.value || "").trim().toUpperCase() !== "APAGAR") throw falha("Digite APAGAR para confirmar.");
+  const cols = grupos.flatMap(g => LIMPEZA[g].cols);
+  const total = cols.reduce((a, c) => a + (S.contagens?.[c] || 0), 0);
+  if (!confirm(`Apagar ${total} registro(s) de vez? Não dá para desfazer.`)) return;
+  let feitos = 0;
+  for (const c of cols) {
+    const refs = (await getDocs(collection(db, c))).docs.map(d => d.ref);
+    for (let i = 0; i < refs.length; i += 400) {
+      const b = writeBatch(db);
+      refs.slice(i, i + 400).forEach(r => b.delete(r));
+      await b.commit();
+      feitos += Math.min(400, refs.length - i);
+      toast(`Apagando… ${feitos} de ${total}`);
+    }
+  }
+  toast(`Pronto: ${feitos} registro(s) apagado(s). Recarregando…`);
+  setTimeout(() => location.reload(), 1500);
+}
+
 /* ================= ADMIN: LOGIN ================= */
 async function entrarAdmin(usuario, senha) {
   usuario = usuario.trim().toLowerCase();
@@ -1751,11 +1856,11 @@ function telaLogin() {
 }
 
 function telaAdmin() {
-  const tabs = [["prog", "Programação"], ["ctrl", "Controle diário" + (S.emAnalise.length ? ` (${S.emAnalise.length})` : "")], ["ind", "Indicadores"], ["hist", "Histórico"], ["set", "Setores"], ["tip", "Tipos"], ["col", "Colaboradores"], ["cfg", "Configuração"]];
+  const tabs = [["prog", "Programação"], ["ctrl", "Controle diário" + (S.emAnalise.length ? ` (${S.emAnalise.length})` : "")], ["usr", "Usuários"], ...(S.oculto ? [["perigo", "⚠ Zona de perigo"]] : []), ["ind", "Indicadores"], ["hist", "Histórico"], ["set", "Setores"], ["tip", "Tipos"], ["col", "Colaboradores"], ["cfg", "Configuração"]];
   const vazio = !S.setores.length || !S.tipos.length;
   const seed = vazio ? `<div class="note" style="margin-top:16px">Ainda não há ${!S.setores.length ? "setores" : ""}${!S.setores.length && !S.tipos.length ? " nem " : ""}${!S.tipos.length ? "tipos de ocorrência" : ""} cadastrados. <button class="btn sm primary" data-act="padrao">Criar lista padrão</button></div>` : "";
   const body = {
-    prog: admProg, ctrl: admCtrl, set: () => admCrud("set"), tip: () => admCrud("tip"), col: () => admCrud("col"), cfg: admCfg,
+    prog: admProg, ctrl: admCtrl, usr: admUsuarios, perigo: admPerigo, set: () => admCrud("set"), tip: () => admCrud("tip"), col: () => admCrud("col"), cfg: admCfg,
     ind: tabInd,
     hist: admHist,
   };
@@ -1806,6 +1911,35 @@ function admCrud(k) {
   </tbody></table></div></div>`;
 }
 
+function admUsuarios() {
+  const l = S.usuarios;
+  if (!l) return `<div class="panel">Carregando usuários…</div>`;
+  return `<div class="panel"><div class="row"><h2 style="margin:0">Líderes com acesso ao painel</h2><button class="btn sm sp" data-act="minha-senha">Trocar minha senha</button></div>
+  <div class="tw" style="margin-top:10px"><table><thead><tr><th>Nome</th><th>Usuário</th><th>Situação</th><th>Criado</th><th></th></tr></thead><tbody>
+  ${l.map(u => `<tr><td>${esc(u.nome)}${u.uid === S.user.uid ? ' <span class="badge b-neutral">você</span>' : ""}</td><td class="mono">${esc(u.usuario || "—")}</td>
+    <td>${u.ativo === false ? '<span class="badge b-alta">Desativado</span>' : u.troca_senha ? '<span class="badge b-pend">Aguardando 1º acesso</span>' : '<span class="badge b-ok">Ativo</span>'}</td>
+    <td>${u.criado_em ? brData(u.criado_em.slice(0, 10)) + (u.criado_por ? " · " + esc(u.criado_por) : "") : "—"}</td>
+    <td>${u.uid === S.user.uid ? "" : `<button class="btn sm ${u.ativo === false ? "" : "danger"}" data-act="usr-alt" data-id="${u.uid}">${u.ativo === false ? "Reativar" : "Desativar"}</button>`}</td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nenhum líder cadastrado.</td></tr>`}
+  </tbody></table></div></div>
+  <div class="panel"><h2>Novo líder</h2>
+  <div class="grid g3" style="gap:8px">
+    <div class="field"><label for="uNome">Nome</label><input id="uNome" autocomplete="off" placeholder="Ex.: João Silva" value="${esc(S.formUsr.nome)}"></div>
+    <div class="field"><label for="uUser">Usuário (para o login)</label><input id="uUser" autocomplete="off" autocapitalize="none" placeholder="Ex.: joao.silva" value="${esc(S.formUsr.usuario)}"></div>
+    <div class="field"><label for="uSenha">Senha inicial</label><input id="uSenha" type="text" autocomplete="off" placeholder="Mínimo 6 caracteres" value="${esc(S.formUsr.senha)}"></div>
+  </div>
+  <button class="btn primary" data-act="usr-criar">Criar acesso</button>
+  <p class="muted" style="font-size:14px;margin-bottom:0">Passe o usuário e a senha inicial para o líder. No primeiro acesso, o app pede para ele criar uma senha própria. Se alguém esquecer a senha, desative a conta e crie outra com um usuário diferente (ex.: joao.silva2).</p></div>`;
+}
+function admPerigo() {
+  if (!S.oculto) return "";
+  const c = S.contagens;
+  const n = g => c ? LIMPEZA[g].cols.reduce((a, k) => a + (c[k] || 0), 0) : "…";
+  return `<div class="panel perigo"><h2>⚠ Limpar dados</h2>
+  <p>Apaga de vez os registros marcados. Usada para zerar os testes antes de começar a valer. <b>Usuários, configuração e logo nunca são apagados.</b></p>
+  ${Object.entries(LIMPEZA).map(([k, g]) => `<label class="row" style="margin:8px 0;align-items:flex-start"><input type="checkbox" data-limpa="${k}" ${g.padrao ? "checked" : ""} style="margin-top:4px"><span>${g.rotulo} <span class="badge b-neutral">${n(k)} registro(s)</span></span></label>`).join("")}
+  <div class="field" style="max-width:320px;margin-top:12px"><label for="confApagar">Para confirmar, digite APAGAR</label><input id="confApagar" autocomplete="off" autocapitalize="characters"></div>
+  <div class="row"><button class="btn danger" data-act="limpar">Apagar dados marcados</button><button class="btn sm sp" data-act="contar">Atualizar contagem</button></div></div>`;
+}
 function admHist() {
   const h = S.hist;
   if (!h.auds) return `<div class="panel">Carregando histórico…</div>`;
@@ -1843,7 +1977,7 @@ function admCfg() {
 
 /* ================= MODAL ================= */
 function abrirModal(html) { $("#sheet").innerHTML = html; $("#modal").classList.add("open"); }
-function fechar() { $("#modal").classList.remove("open"); F = null; }
+function fechar() { if (F?.tipoModal === "senha" && F.obrigatoria && S.trocaSenha) return; $("#modal").classList.remove("open"); F = null; }
 function modalFinalizar() {
   abrirModal(`<h2>Finalizar auditoria</h2><div class="auto">${S.audSet.length} setores concluídos · ${S.verifHoje.length} pendência(s) conferida(s) · ${S.aud?.total_ocorrencias || 0} ocorrência(s) nova(s) · horário de finalização registrado automaticamente</div>
   <div class="field"><label for="fObs">Observação geral do dia</label><textarea id="fObs" rows="3" placeholder="Resumo da ronda"></textarea></div>
@@ -1860,7 +1994,7 @@ document.addEventListener("click", e => {
   switch (a) {
     case "modo": S.modo = d.v; break;
     case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); if (d.v === "pend") return acao(carregarTodas); if (d.v === "ind") return acao(carregarInd); break;
-    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "ind") return acao(carregarInd); if (d.v === "cfg" && S.logo === undefined) return acao(carregarLogo); break;
+    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "ind") return acao(carregarInd); if (d.v === "usr") return acao(carregarUsuarios); if (d.v === "perigo") return acao(carregarContagens); if (d.v === "cfg" && S.logo === undefined) return acao(carregarLogo); break;
     case "go-main": S.view = "main"; break;
     case "go-admin": S.view = "admin"; if (S.isAdmin && S.adminTab === "prog") return acao(carregarProg); break;
     case "sair": return acao(sair);
@@ -1905,6 +2039,13 @@ document.addEventListener("click", e => {
     case "hist-abrir": return acao(() => abrirHist(d.id));
     case "logo": $("#logoInput").value = ""; return $("#logoInput").click();
     case "logo-del": return acao(removerLogo);
+    case "usr-criar": { S.formUsr = { nome: $("#uNome").value, usuario: $("#uUser").value, senha: $("#uSenha").value }; const f = S.formUsr; return acao(() => criarUsuario(f.nome, f.usuario, f.senha)); }
+    case "usr-alt": return acao(() => alternarUsuario(d.id));
+    case "minha-senha": return modalSenha(false);
+    case "salvar-senha": return acao(salvarSenha);
+    case "sair-forcado": F = null; $("#modal").classList.remove("open"); return acao(sair);
+    case "contar": return acao(carregarContagens);
+    case "limpar": { const g = [...document.querySelectorAll("[data-limpa]:checked")].map(x => x.dataset.limpa); return acao(() => limparDados(g)); }
     case "sem-nav": { const n = addDias(S.ind.sem, Number(d.v)); if (n > segundaDe(S.hoje)) return; S.ind.sem = n; break; }
     case "sem-docx": return acao(() => gerarRelatorioSemanal(S.ind.sem));
     case "ind-per": S.ind.per = d.v; if (d.v === "custom" && !S.ind.ini) { S.ind.ini = addDias(S.hoje, -29); S.ind.fim = S.hoje; } return acao(carregarInd);
@@ -1942,12 +2083,14 @@ setInterval(() => { if (todayStr() !== S.hoje && S.pronto) acao(carregarDia); },
 /* ================= AUTENTICAÇÃO ================= */
 onAuthStateChanged(auth, async user => {
   if (!user) { try { await signInAnonymously(auth); } catch (e) { console.error(e); $("#app").innerHTML = `<div class="panel" style="margin-top:24px">Não foi possível conectar: ${esc(e.code || e.message)}</div>`; } return; }
-  S.user = user; S.isAdmin = false; S.adminNome = "";
+  S.user = user; S.isAdmin = false; S.adminNome = ""; S.oculto = false; S.trocaSenha = false; S.usuarios = null; S.contagens = null;
   if (!user.isAnonymous) {
     try {
       const u = await getDoc(doc(db, "usuarios", user.uid));
-      if (u.exists() && u.data().perfil === "admin") { S.isAdmin = true; S.adminNome = u.data().nome || user.email.replace(DOMINIO, ""); }
-      else { toast("Esta conta não tem acesso de admin."); await signOut(auth); return; }
+      if (u.exists() && u.data().perfil === "admin" && u.data().ativo !== false) {
+        S.isAdmin = true; S.adminNome = u.data().nome || user.email.replace(DOMINIO, "");
+        S.oculto = u.data().oculto === true; S.trocaSenha = u.data().troca_senha === true;
+      } else { toast(u.exists() && u.data().ativo === false ? "Esta conta foi desativada. Fale com um líder." : "Esta conta não tem acesso de admin."); await signOut(auth); return; }
     } catch (e) { console.error(e); toast("Erro ao verificar acesso."); await signOut(auth); return; }
   }
   // reassina a cada troca de conta (anônimo ↔ admin), pois a troca derruba as escutas antigas
@@ -1955,6 +2098,7 @@ onAuthStateChanged(auth, async user => {
   catch (e) { console.error(e); $("#app").innerHTML = `<div class="panel" style="margin-top:24px">Erro ao carregar: ${esc(e.code || e.message)}</div>`; return; }
   if (S.isAdmin && S.view === "admin" && S.adminTab === "prog") { try { await carregarProg(); } catch (e) { console.error(e); } }
   if (S.isAdmin) limparFotosAntigas().catch(e => console.error(e));
+  if (S.isAdmin && S.trocaSenha) setTimeout(() => modalSenha(true), 50);
   render();
 });
 render();
