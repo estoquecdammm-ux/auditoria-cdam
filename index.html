@@ -188,6 +188,12 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .pend.oc-em_analise{border-left-color:var(--info)}
 .pend.oc-cancelada{border-left-color:var(--line);opacity:.8}
 .pend.oc .s{margin-top:2px}
+
+.hist{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:8px;background:var(--surface)}
+.hist.open{border-color:var(--yellow)}
+.histhead{border:0;background:none;padding:4px 0;text-align:left;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;flex:1;min-width:240px}
+.histbody{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
+.logoprev{max-height:56px;max-width:200px;background:#fff;border-radius:6px;padding:4px;border:1px solid var(--line)}
 </style>
 </head>
 <body>
@@ -203,6 +209,7 @@ body.busy .btn{pointer-events:none;opacity:.7}
 <p class="credito">Mateus Przibiovicz</p>
 <div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
 <div class="toast" id="toast"></div>
+<input type="file" id="logoInput" accept="image/*" hidden>
 <input type="file" id="fotoInput" accept="image/*" capture="environment" hidden>
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
@@ -253,6 +260,7 @@ const S = {
   mes: todayStr().slice(0, 7), mesAuds: [], mesAtrib: {},
   progRef: todayStr(), progDias: [], progAuds: {},
   ocsHoje: [], emAnalise: [], pendAbertas: [], verifHoje: [], todasOcs: null,
+  hist: { mes: todayStr().slice(0, 7), auditor: "", status: "", auds: null, aberto: {} }, logo: undefined,
   pf: { status: "abertas", grav: "", setor: "", auditor: "", resp: "", q: "", ord: "dias" },
   busy: false,
 };
@@ -477,6 +485,8 @@ async function finalizar(obs) {
     setores_concluidos: S.audSet.filter(s => s.status === "concluido").length,
   });
   toast("Auditoria finalizada");
+  const id = S.aud.id;
+  try { await gerarRelatorioDocx(id); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o Word agora") + ". Use o botão Baixar relatório."); }
 }
 async function reiniciar() {
   if (!S.isAdmin || !S.aud) return;
@@ -780,6 +790,297 @@ function diasAberto(o) {
   return Math.max(0, Math.round((parseD(fim) - parseD(o.auditoria_data)) / 86400000));
 }
 
+/* ================= RELATÓRIO WORD ================= */
+/* Gerador do relatório Word — recebe a biblioteca docx (D) e os dados já prontos.
+   dados = { cfg, aud, setores, ocorrencias, verificacoes, fotos: {id: {bytes, w, h, type}}, logo: {bytes,w,h,type}|null, geradoEm } */
+function montarRelatorio(D, dados) {
+  const { Document, Paragraph, TextRun, Table, TableRow, TableCell, WidthType, BorderStyle, ShadingType, AlignmentType,
+    ImageRun, Header, Footer, PageNumber, VerticalAlign, TableLayoutType, HeadingLevel } = D;
+  const { cfg, aud, setores, ocorrencias, verificacoes, fotos, logo, geradoEm } = dados;
+  const NAVY = "1F2A44", AMARELO = "F2B705", CINZA = "5E6A7D", LINHA = "D8DEE7", FUNDO = "F3F5F8";
+  const W = 10206; // largura útil A4 com margens de 1,5 cm
+  const FONTE = "Arial";
+  const br = s => s ? String(s).slice(0, 10).split("-").reverse().join("/") : "—";
+  const hr = s => s ? String(s).slice(11, 16) : "—";
+  const dur = (a, b) => { if (!a || !b) return "—"; const m = Math.round((new Date(b) - new Date(a)) / 60000); return `${Math.floor(m / 60)}h${String(m % 60).padStart(2, "0")}`; };
+  const GRAV = { baixa: ["Baixa", "DCE9F7", "2C6CB0"], media: ["Média", "FDF0D5", "8A5A12"], alta: ["Alta", "FBE1DE", "C0392B"], critica: ["Crítica", "F0DEF7", "7A1FA2"] };
+  const ST = { em_analise: "Em análise", pendente: "Pendente", parcialmente_resolvida: "Parcialmente resolvida", resolvida: "Resolvida", cancelada: "Cancelada" };
+  const ACAO = { resolvido_hora: "Resolvido na hora", encaminhado: "Encaminhado", nao_possivel: "Não foi possível" };
+  const VER = { resolvido: "Resolvido", parcialmente_resolvido: "Parcialmente resolvido", continua_pendente: "Continua pendente" };
+  const SETST = { pendente: "Pendente", em_andamento: "Em andamento", concluido: "Concluído" };
+  const AUDST = { em_andamento: "Em andamento", finalizada: "Finalizada", reiniciada: "Reiniciada" };
+
+  const t = (text, o = {}) => new TextRun({ text: String(text ?? ""), font: FONTE, size: o.size || 20, bold: o.bold, color: o.color, italics: o.italics });
+  const p = (runs, o = {}) => new Paragraph({ children: Array.isArray(runs) ? runs : [runs], spacing: { before: o.before ?? 0, after: o.after ?? 80 }, alignment: o.align, keepNext: o.keepNext, border: o.border });
+  const semBorda = { top: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }, bottom: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }, left: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" }, right: { style: BorderStyle.NONE, size: 0, color: "FFFFFF" } };
+  const borda = c => ({ style: BorderStyle.SINGLE, size: 4, color: c || LINHA });
+  const bordas = c => ({ top: borda(c), bottom: borda(c), left: borda(c), right: borda(c) });
+  const cel = (children, w, o = {}) => new TableCell({
+    children: Array.isArray(children) ? children : [children], width: { size: w, type: WidthType.DXA },
+    shading: o.fill ? { type: ShadingType.CLEAR, color: "auto", fill: o.fill } : undefined,
+    borders: o.borders || bordas(), margins: { top: 60, bottom: 60, left: 100, right: 100 }, verticalAlign: o.v || VerticalAlign.CENTER, columnSpan: o.span,
+  });
+  const tabela = (larguras, linhas, o = {}) => new Table({ width: { size: larguras.reduce((a, b) => a + b, 0), type: WidthType.DXA }, columnWidths: larguras, rows: linhas, layout: TableLayoutType.FIXED, borders: o.borders });
+  const titulo = (txt) => p([t(txt.toUpperCase(), { bold: true, size: 22, color: NAVY })], { before: 280, after: 120, keepNext: true, border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: AMARELO, space: 4 } } });
+  const img = (f, maxW, maxH) => {
+    if (!f) return null;
+    const k = Math.min(maxW / f.w, maxH / f.h, 1e9);
+    return new ImageRun({ type: f.type, data: f.bytes, transformation: { width: Math.round(f.w * k), height: Math.round(f.h * k) } });
+  };
+
+  /* ---------- cabeçalho e rodapé ---------- */
+  const logoRun = logo ? img(logo, 150, 48) : null;
+  const header = new Header({
+    children: [tabela([2600, W - 2600], [new TableRow({
+      children: [
+        cel(p(logoRun ? [logoRun] : [t(cfg.empresa_nome || "", { bold: true, size: 24, color: NAVY })], { after: 0 }), 2600, { borders: semBorda }),
+        cel([p([t(cfg.empresa_nome || "", { bold: true, size: 22, color: NAVY })], { align: AlignmentType.RIGHT, after: 0 }),
+          p([t(cfg.empresa_subtitulo || "", { size: 16, color: CINZA })], { align: AlignmentType.RIGHT, after: 0 })], W - 2600, { borders: semBorda }),
+      ],
+    })], { borders: { ...semBorda, insideHorizontal: semBorda.top, insideVertical: semBorda.top } }),
+    p([t("")], { after: 0, border: { bottom: { style: BorderStyle.SINGLE, size: 12, color: NAVY, space: 2 } } })],
+  });
+  const footer = new Footer({
+    children: [p([t(`Auditoria de ${br(aud.data)} · ${aud.colaborador_nome} · gerado em ${br(geradoEm)} às ${hr(geradoEm)}    Página `, { size: 16, color: CINZA }),
+      new TextRun({ children: [PageNumber.CURRENT], font: FONTE, size: 16, color: CINZA }), t(" de ", { size: 16, color: CINZA }),
+      new TextRun({ children: [PageNumber.TOTAL_PAGES], font: FONTE, size: 16, color: CINZA })], { align: AlignmentType.CENTER, after: 0 })],
+  });
+
+  /* ---------- números ---------- */
+  const novas = ocorrencias;
+  const cont = k => novas.filter(k).length;
+  const kVer = r => verificacoes.filter(v => v.resultado === r).length;
+  const kpis = [
+    ["Ocorrências novas", novas.length], ["Resolvidas na hora", cont(o => o.acao_realizada === "resolvido_hora")],
+    ["Críticas ou altas", cont(o => o.gravidade === "critica" || o.gravidade === "alta")], ["Reincidências", cont(o => o.reincidencia)],
+    ["Pendências conferidas", verificacoes.length], ["Resolvidas na conferência", kVer("resolvido")],
+    ["Parcialmente resolvidas", kVer("parcialmente_resolvido")], ["Continuam pendentes", kVer("continua_pendente")],
+  ];
+  const kw = W / 4;
+  const kpiRow = arr => new TableRow({ children: arr.map(([l, v]) => cel([p([t(v, { bold: true, size: 32, color: NAVY })], { after: 0 }), p([t(l, { size: 16, color: CINZA })], { after: 0 })], kw, { fill: FUNDO, borders: bordas("FFFFFF") })) });
+
+  /* ---------- corpo ---------- */
+  const corpo = [];
+  corpo.push(p([t("Relatório de auditoria operacional", { bold: true, size: 36, color: NAVY })], { before: 120, after: 40 }));
+  corpo.push(p([t(`${aud.dia_semana || ""}, ${br(aud.data)}`, { size: 22, color: CINZA })], { after: 200 }));
+
+  const lin = (a, b, c, d) => new TableRow({ children: [cel(p([t(a, { size: 18, color: CINZA })], { after: 0 }), 1900, { fill: FUNDO }), cel(p([t(b, { bold: true })], { after: 0 }), 3203), cel(p([t(c, { size: 18, color: CINZA })], { after: 0 }), 1900, { fill: FUNDO }), cel(p([t(d, { bold: true })], { after: 0 }), 3203)] });
+  corpo.push(tabela([1900, 3203, 1900, 3203], [
+    lin("Auditor", aud.colaborador_nome, "Status", AUDST[aud.status] || aud.status),
+    lin("Início", hr(aud.horario_inicio), "Finalização", hr(aud.horario_finalizacao)),
+    lin("Duração", dur(aud.horario_inicio, aud.horario_finalizacao), "Setores concluídos", `${setores.filter(s => s.status === "concluido").length} de ${setores.length}`),
+  ]));
+
+  corpo.push(titulo("Resumo"));
+  corpo.push(tabela([kw, kw, kw, kw], [kpiRow(kpis.slice(0, 4)), kpiRow(kpis.slice(4))]));
+
+  corpo.push(titulo("Setores"));
+  const sw = [4006, 1900, 1400, 1400, 1500];
+  const th = (x, w) => cel(p([t(x, { bold: true, size: 18, color: "FFFFFF" })], { after: 0 }), w, { fill: NAVY, borders: bordas(NAVY) });
+  corpo.push(tabela(sw, [
+    new TableRow({ tableHeader: true, children: ["Setor", "Status", "Abertura", "Conclusão", "Ocorrências"].map((x, i) => th(x, sw[i])) }),
+    ...setores.map((s, i) => new TableRow({ children: [s.setor_nome, SETST[s.status] || s.status, hr(s.horario_inicio), hr(s.horario_conclusao), String(s.ocorrencias_count || 0)].map((x, j) => cel(p([t(x)], { after: 0 }), sw[j], { fill: i % 2 ? FUNDO : undefined })) })),
+  ]));
+
+  corpo.push(titulo(`Ocorrências registradas (${novas.length})`));
+  if (!novas.length) corpo.push(p([t("Nenhuma ocorrência registrada nesta auditoria.", { italics: true, color: CINZA })]));
+  novas.forEach(o => {
+    const g = GRAV[o.gravidade] || GRAV.media;
+    const det = [];
+    const campo = (l, v, cor) => { if (v) det.push(p([t(l + ": ", { bold: true, size: 18, color: cor || CINZA }), t(v, { size: 18, bold: !!cor, color: cor })], { after: 40, keepNext: true })); };
+    campo("Produto", [o.produto_codigo, o.produto_descricao].filter(Boolean).join(" · "));
+    campo("Local", o.local);
+    campo("Descrição", o.descricao);
+    campo("Ação", ACAO[o.acao_realizada]);
+    campo("Responsável", o.responsavel);
+    campo("Observação", o.observacao);
+    campo("Registrada às", hr(o.registrado_em));
+    if (o.reincidencia) campo("Reincidência", `mesmo tipo e setor que ${o.reincidencia_de} (últimos 10 dias)`, "C0392B");
+    if (o.status === "resolvida" && o.acao_realizada !== "resolvido_hora") campo("Solução", `${o.descricao_solucao || ""} (${o.resolvido_por_nome || ""}, ${br(o.data_resolucao)})`);
+    if (o.status === "cancelada") campo("Cancelamento", `${o.justificativa || ""} (${o.cancelado_por_nome || ""})`);
+    const fs = o.fotos_apagadas ? [] : [["Antes", o.foto_antes_id], ["Depois", o.foto_depois_id], ["Solução", o.foto_solucao_id]].filter(([, id]) => id && fotos[id]);
+    const linhas = [
+      new TableRow({ cantSplit: true, children: [cel([p([t(`${o.numero}  `, { bold: true, size: 22, color: "FFFFFF" }), t(`${o.tipo_ocorrencia} · ${o.setor_nome}`, { bold: true, size: 20, color: "FFFFFF" })], { after: 0, keepNext: true })], W - 3000, { fill: NAVY, borders: bordas(NAVY) }),
+        cel(p([t(`${g[0]} · ${ST[o.status] || o.status}`, { bold: true, size: 18, color: g[2] })], { after: 0, align: AlignmentType.RIGHT, keepNext: true }), 3000, { fill: g[1], borders: bordas(NAVY) })] }),
+      new TableRow({ cantSplit: true, children: [cel(det.length ? det : [p([t("")], { keepNext: true })], W, { span: 2, v: VerticalAlign.TOP })] }),
+    ];
+    if (fs.length) {
+      const cw = Math.floor(W / 3);
+      linhas.push(new TableRow({ cantSplit: true, children: [cel([tabela(fs.map(() => cw), [new TableRow({ children: fs.map(([l, id]) => cel([p([img(fotos[id], 200, 170)], { after: 20, align: AlignmentType.CENTER }), p([t(l, { size: 16, color: CINZA })], { after: 0, align: AlignmentType.CENTER })], cw, { borders: semBorda })) })], { borders: { ...semBorda, insideHorizontal: semBorda.top, insideVertical: semBorda.top } })], W, { span: 2 })] }));
+    } else if (o.fotos_apagadas) {
+      linhas.push(new TableRow({ children: [cel(p([t("Fotos removidas após 90 dias da resolução.", { italics: true, size: 16, color: CINZA })], { after: 0 }), W, { span: 2 })] }));
+    }
+    corpo.push(tabela([W - 3000, 3000], linhas));
+    corpo.push(p([t("")], { after: 120 }));
+  });
+
+  corpo.push(titulo(`Pendências conferidas (${verificacoes.length})`));
+  if (!verificacoes.length) corpo.push(p([t("Nenhuma pendência de dias anteriores para conferir.", { italics: true, color: CINZA })]));
+  else {
+    const vw = [1300, 3006, 1900, 800, 3200];
+    corpo.push(tabela(vw, [
+      new TableRow({ tableHeader: true, children: ["Número", "Ocorrência", "Resultado", "Hora", "Observação e foto"].map((x, i) => th(x, vw[i])) }),
+      ...verificacoes.map((v, i) => new TableRow({ cantSplit: true, children: [
+        cel(p([t(v.ocorrencia_numero, { bold: true })], { after: 0 }), vw[0]),
+        cel([p([t(v.ocorrencia_tipo || "")], { after: 0 }), p([t(v.ocorrencia_setor || "", { size: 16, color: CINZA })], { after: 0 })], vw[1]),
+        cel(p([t(VER[v.resultado] || v.resultado, { bold: true, color: v.resultado === "resolvido" ? "1E8E5A" : v.resultado === "parcialmente_resolvido" ? "8A5A12" : "C0392B" })], { after: 0 }), vw[2]),
+        cel(p([t(hr(v.data_verificacao))], { after: 0 }), vw[3]),
+        cel([...(v.observacao ? [p([t(v.observacao, { size: 18 })], { after: 40 })] : []), ...(fotos[v.foto_id] ? [p([img(fotos[v.foto_id], 190, 120)], { after: 0 })] : [])], vw[4], { v: VerticalAlign.TOP }),
+      ] })),
+    ]));
+  }
+
+  corpo.push(titulo("Observação final"));
+  corpo.push(p([t(aud.observacao_final || "Sem observações.", { italics: !aud.observacao_final, color: aud.observacao_final ? undefined : CINZA })]));
+
+  const ass = x => cel([p([t("")], { before: 600, after: 0, border: { bottom: { style: BorderStyle.SINGLE, size: 6, color: NAVY, space: 2 } } }), p([t(x, { size: 18, color: CINZA })], { align: AlignmentType.CENTER, after: 0 })], 4603, { borders: semBorda });
+  corpo.push(p([t("")], { before: 200 }));
+  corpo.push(tabela([4603, 1000, 4603], [new TableRow({ cantSplit: true, children: [ass(`Auditor: ${aud.colaborador_nome}`), cel(p([t("")]), 1000, { borders: semBorda }), ass("Líder responsável")] })], { borders: { ...semBorda, insideHorizontal: semBorda.top, insideVertical: semBorda.top } }));
+
+  return new Document({
+    creator: cfg.empresa_nome || "Auditoria Operacional", title: `Auditoria ${br(aud.data)}`,
+    styles: { default: { document: { run: { font: FONTE, size: 20 } } } },
+    sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1300, bottom: 1000, left: 850, right: 850, header: 450, footer: 450 } } }, headers: { default: header }, footers: { default: footer }, children: corpo }],
+  });
+}
+
+let docxProm = null;
+function carregarDocx() {
+  if (window.docx) return Promise.resolve(window.docx);
+  return docxProm ||= new Promise((res, rej) => {
+    const sc = document.createElement("script");
+    sc.src = "https://cdn.jsdelivr.net/npm/docx@9.6.1/dist/index.iife.js";
+    const tm = setTimeout(() => { docxProm = null; rej(falha("A internet está lenta para carregar o gerador do Word")); }, 20000);
+    sc.onload = () => { clearTimeout(tm); window.docx ? res(window.docx) : rej(falha("Biblioteca do Word não carregou.")); };
+    sc.onerror = () => { clearTimeout(tm); docxProm = null; rej(falha("Sem internet para carregar o gerador do Word.")); };
+    document.head.appendChild(sc);
+  });
+}
+function imgDeDataURL(url) {
+  return new Promise(res => {
+    if (!url) return res(null);
+    const im = new Image();
+    im.onload = () => {
+      const bin = atob(url.split(",")[1] || ""), bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      res({ bytes, w: im.naturalWidth || im.width, h: im.naturalHeight || im.height, type: url.startsWith("data:image/png") ? "png" : "jpg" });
+    };
+    im.onerror = () => res(null);
+    im.src = url;
+  });
+}
+async function carregarLogo() {
+  const s = await getDoc(doc(db, "config", "logo"));
+  S.logo = s.exists() && s.data().data ? s.data().data : null;
+  return S.logo;
+}
+function baixarArquivo(blob, nome) {
+  const a = document.createElement("a"), url = URL.createObjectURL(blob);
+  a.href = url; a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+const nomeArquivo = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");
+async function gerarRelatorioDocx(audId) {
+  toast("Gerando relatório Word…");
+  const [D, aSnap] = await Promise.all([carregarDocx(), getDoc(doc(db, "auditorias", audId))]);
+  if (!aSnap.exists()) throw falha("Auditoria não encontrada.");
+  const aud = aSnap.data();
+  const [setSnap, ocSnap, vSnap, logoUrl] = await Promise.all([
+    getDocs(query(collection(db, "auditoria_setores"), where("auditoria_id", "==", audId))),
+    getDocs(query(collection(db, "ocorrencias"), where("auditoria_id", "==", audId))),
+    getDocs(query(collection(db, "verificacoes"), where("dia", "==", aud.data))),
+    S.logo === undefined ? carregarLogo() : Promise.resolve(S.logo),
+  ]);
+  const setores = setSnap.docs.map(d => d.data()).sort(porOrdem);
+  const ocorrencias = ocSnap.docs.map(d => d.data()).sort((a, b) => a.numero_seq - b.numero_seq);
+  const verificacoes = vSnap.docs.map(d => d.data()).sort((a, b) => String(a.data_verificacao).localeCompare(String(b.data_verificacao)));
+  const ids = new Set();
+  ocorrencias.forEach(o => { if (!o.fotos_apagadas) FOTO_CAMPOS.forEach(k => o[k] && ids.add(o[k])); });
+  verificacoes.forEach(v => v.foto_id && ids.add(v.foto_id));
+  const fotos = {};
+  await Promise.all([...ids].map(async id => { const f = await imgDeDataURL(await carregarFoto(id)); if (f) fotos[id] = f; }));
+  const geradoEm = nowISO();
+  const documento = montarRelatorio(D, {
+    cfg: { empresa_nome: S.config.empresa_nome ?? "Lojas MM · CDAM", empresa_subtitulo: S.config.empresa_subtitulo ?? "Relatório de auditoria operacional diária" },
+    aud, setores, ocorrencias, verificacoes, fotos, logo: await imgDeDataURL(logoUrl), geradoEm,
+  });
+  const blob = await D.Packer.toBlob(documento);
+  baixarArquivo(blob, `Auditoria_${aud.data}_${nomeArquivo(aud.colaborador_nome)}.docx`);
+  try { await updateDoc(doc(db, "auditorias", audId), { relatorio_gerado_em: geradoEm }); } catch (e) { console.warn(e); }
+  toast("Relatório Word baixado");
+}
+
+/* ================= CSV ================= */
+function exportarCsv(ocs, nome) {
+  if (!ocs.length) throw falha("Nenhuma ocorrência para exportar.");
+  const cols = [["Número", o => o.numero], ["Data", o => brData(o.auditoria_data)], ["Auditor", o => o.auditor_nome], ["Setor", o => o.setor_nome], ["Tipo", o => o.tipo_ocorrencia],
+    ["Gravidade", o => gravTxt[o.gravidade]], ["Status", o => ocStTxt[o.status]], ["Ação", o => acaoTxt[o.acao_realizada]], ["Responsável", o => o.responsavel],
+    ["Código produto", o => o.produto_codigo], ["Descrição produto", o => o.produto_descricao], ["Local", o => o.local], ["Descrição", o => o.descricao], ["Observação", o => o.observacao],
+    ["Registrada em", o => o.registrado_em ? brData(o.registrado_em.slice(0, 10)) + " " + horaDe(o.registrado_em) : ""],
+    ["Encerrada em", o => { const x = o.data_resolucao || o.data_cancelamento; return x ? brData(x.slice(0, 10)) + " " + horaDe(x) : ""; }],
+    ["Dias em aberto", o => diasAberto(o)], ["Reincidência", o => o.reincidencia ? "Sim (" + o.reincidencia_de + ")" : "Não"],
+    ["Conferências", o => o.verificacoes_count || 0], ["Resolvida por", o => o.resolvido_por_nome], ["Solução", o => o.descricao_solucao], ["Justificativa cancelamento", o => o.justificativa]];
+  const q = v => `"${String(v ?? "").replace(/"/g, '""').replace(/\r?\n/g, " ")}"`;
+  const linhas = [cols.map(c => q(c[0])).join(";"), ...ocs.sort((a, b) => a.numero_seq - b.numero_seq).map(o => cols.map(c => q(c[1](o))).join(";"))];
+  baixarArquivo(new Blob(["\ufeff" + linhas.join("\r\n")], { type: "text/csv;charset=utf-8" }), nome);
+  toast(`CSV com ${ocs.length} ocorrência(s) baixado`);
+}
+async function csvDaAuditoria(audId, data) {
+  const snap = await getDocs(query(collection(db, "ocorrencias"), where("auditoria_id", "==", audId)));
+  exportarCsv(snap.docs.map(d => d.data()), `Ocorrencias_${data}.csv`);
+}
+async function csvDoMes() {
+  const m = S.hist.mes, snap = await getDocs(query(collection(db, "ocorrencias"), where("auditoria_data", ">=", m + "-01"), where("auditoria_data", "<=", m + "-31")));
+  exportarCsv(snap.docs.map(d => d.data()), `Ocorrencias_${m}.csv`);
+}
+async function csvTudo() {
+  exportarCsv((await getDocs(collection(db, "ocorrencias"))).docs.map(d => d.data()), `Ocorrencias_todas_${S.hoje}.csv`);
+}
+
+/* ================= HISTÓRICO ================= */
+async function carregarHist() {
+  S.hist.auds = await audsEntre(S.hist.mes + "-01", S.hist.mes + "-31");
+  S.hist.aberto = {};
+}
+async function abrirHist(id) {
+  if (S.hist.aberto[id]) { delete S.hist.aberto[id]; return; }
+  const [st, oc] = await Promise.all([
+    getDocs(query(collection(db, "auditoria_setores"), where("auditoria_id", "==", id))),
+    getDocs(query(collection(db, "ocorrencias"), where("auditoria_id", "==", id))),
+  ]);
+  S.hist.aberto[id] = { setores: st.docs.map(d => d.data()).sort(porOrdem), ocs: oc.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => a.numero_seq - b.numero_seq) };
+}
+
+/* ================= LOGO ================= */
+function comprimirLogo(file) {
+  return new Promise((res, rej) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const k = Math.min(1, 600 / img.width, 300 / img.height);
+      const c = document.createElement("canvas"); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      let out = c.toDataURL("image/png");
+      if (out.length > 700000) out = c.toDataURL("image/jpeg", 0.85);
+      res(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); rej(falha("Não foi possível ler a imagem do logo.")); };
+    img.src = url;
+  });
+}
+async function salvarLogo(file) {
+  const data = await comprimirLogo(file);
+  await setDoc(doc(db, "config", "logo"), { data, alterado_por: S.adminNome, alterado_em: nowISO() });
+  S.logo = data;
+  toast("Logo salvo");
+}
+async function removerLogo() {
+  if (!confirm("Remover o logo do relatório?")) return;
+  await setDoc(doc(db, "config", "logo"), { data: null, alterado_por: S.adminNome, alterado_em: nowISO() });
+  S.logo = null;
+  toast("Logo removido");
+}
+
 /* ================= ADMIN: LOGIN ================= */
 async function entrarAdmin(usuario, senha) {
   usuario = usuario.trim().toLowerCase();
@@ -914,9 +1215,10 @@ function tabHoje() {
     </div></section>`;
   let acaoHtml = "";
   if (!a && S.atrib) acaoHtml = `<button class="btn primary block exec-only" data-act="iniciar">Iniciar auditoria</button><p class="muted" style="text-align:center">${S.modo === "ver" ? "Mude para Executar para iniciar a ronda." : "O horário de início é registrado automaticamente."}</p>`;
-  else if (a?.status === "finalizada") acaoHtml = `<div class="panel"><h2>Auditoria finalizada às ${horaDe(a.horario_finalizacao)}</h2>${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}<p class="muted">Duração: ${duracao(a.horario_inicio, a.horario_finalizacao)}</p><div class="row"><button class="btn dark" data-act="msg" data-m="O relatório Word chega na fase 4">Baixar relatório Word</button></div></div>`;
+  else if (a?.status === "finalizada") acaoHtml = `<div class="panel"><h2>Auditoria finalizada às ${horaDe(a.horario_finalizacao)}</h2>${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}<p class="muted">Duração: ${duracao(a.horario_inicio, a.horario_finalizacao)}</p>${a.relatorio_gerado_em ? `<p class="muted" style="font-size:14px">Último relatório gerado às ${horaDe(a.relatorio_gerado_em)}</p>` : ""}<div class="row"><button class="btn dark" data-act="docx" data-id="${a.id}">Baixar relatório Word</button><button class="btn" data-act="csv-aud" data-id="${a.id}" data-d="${a.data}">Exportar CSV</button></div></div>`;
 
   const setHtml = a ? `<div class="panel"><h2>Setores</h2>
+    ${a.status === "em_andamento" && (a.total_ocorrencias || 0) > 0 ? `<div class="row" style="margin:-4px 0 8px"><button class="btn sm sp" data-act="csv-aud" data-id="${a.id}" data-d="${a.data}">Exportar CSV</button></div>` : ""}
     <div class="prog"><div class="row"><span>Setores concluídos</span><span class="sp">${concl}/${tot}</span></div><div class="bar"><i style="width:${tot ? concl / tot * 100 : 0}%"></i></div></div>
     ${S.audSet.map(s => `<div class="item"><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""} · ${s.ocorrencias_count || 0} ocorrência${s.ocorrencias_count === 1 ? "" : "s"}</div></div>
       <button class="btn sm sp" data-act="abrir-setor" data-id="${s.id}">${a.status === "em_andamento" && s.status !== "concluido" && S.modo === "exec" ? "Abrir setor" : "Ver"}</button></div>`).join("")}
@@ -1012,8 +1314,8 @@ function tabDias() {
   return `<div class="panel"><div class="row" style="margin-bottom:10px"><button class="btn sm" data-act="mes" data-v="-1">‹</button><h2 style="margin:0">${nomeMes}</h2><button class="btn sm" data-act="mes" data-v="1">›</button></div>
   <div class="month">${cells}</div>
   <div class="legend"><span style="--c:var(--ok)">Concluída</span><span style="--c:var(--info)">Em andamento</span><span style="--c:var(--crit)">Reiniciada</span><span style="--c:var(--bad)">Não realizada</span><span style="--c:var(--line)">Programada</span></div></div>
-  <div class="panel"><h2>Auditorias do mês</h2>${lista.length ? `<div class="tw"><table><thead><tr><th>Data</th><th>Auditor</th><th>Início</th><th>Fim</th><th>Duração</th><th>Status</th>${S.isAdmin ? "<th></th>" : ""}</tr></thead><tbody>
-  ${lista.map(a => `<tr><td>${brData(a.data)}</td><td>${esc(a.colaborador_nome)}</td><td>${horaDe(a.horario_inicio)}</td><td>${horaDe(a.horario_finalizacao)}</td><td>${duracao(a.horario_inicio, a.horario_finalizacao)}</td><td><span class="badge ${a.status === "finalizada" ? "b-ok" : a.status === "reiniciada" ? "b-critica" : "b-pend"}">${audTxt[a.status]}</span></td>${S.isAdmin ? `<td><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir</button></td>` : ""}</tr>`).join("")}
+  <div class="panel"><h2>Auditorias do mês</h2>${lista.length ? `<div class="tw"><table><thead><tr><th>Data</th><th>Auditor</th><th>Início</th><th>Fim</th><th>Duração</th><th>Status</th><th></th></tr></thead><tbody>
+  ${lista.map(a => `<tr><td>${brData(a.data)}</td><td>${esc(a.colaborador_nome)}</td><td>${horaDe(a.horario_inicio)}</td><td>${horaDe(a.horario_finalizacao)}</td><td>${duracao(a.horario_inicio, a.horario_finalizacao)}</td><td><span class="badge ${a.status === "finalizada" ? "b-ok" : a.status === "reiniciada" ? "b-critica" : "b-pend"}">${audTxt[a.status]}</span></td><td>${a.status === "finalizada" ? `<button class="btn sm" data-act="docx" data-id="${a.id}">Word</button>` : ""}${S.isAdmin ? ` <button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir</button>` : ""}</td></tr>`).join("")}
   </tbody></table></div>` : `<p class="muted">Nenhuma auditoria neste mês.</p>`}</div>`;
 }
 
@@ -1036,7 +1338,7 @@ function telaAdmin() {
   const body = {
     prog: admProg, ctrl: admCtrl, set: () => admCrud("set"), tip: () => admCrud("tip"), col: () => admCrud("col"), cfg: admCfg,
     ind: () => emBreve("Indicadores", "Chega na fase 5."),
-    hist: () => emBreve("Histórico", "Chega na fase 4, junto com o relatório Word. Por enquanto, a aba Dias mostra as auditorias de cada mês."),
+    hist: admHist,
   };
   return seed + `<div class="tabs">${tabs.map(([k, l]) => `<button data-act="atab" data-v="${k}" class="${S.adminTab === k ? "on" : ""}">${l}</button>`).join("")}</div>${body[S.adminTab]()}`;
 }
@@ -1085,13 +1387,38 @@ function admCrud(k) {
   </tbody></table></div></div>`;
 }
 
+function admHist() {
+  const h = S.hist;
+  if (!h.auds) return `<div class="panel">Carregando histórico…</div>`;
+  const auditores = [...new Set(h.auds.map(a => a.colaborador_nome))].sort();
+  const l = h.auds.filter(a => (!h.auditor || a.colaborador_nome === h.auditor) && (!h.status || a.status === h.status))
+    .sort((a, b) => b.data.localeCompare(a.data) || String(b.horario_inicio).localeCompare(String(a.horario_inicio)));
+  const badge = st => `<span class="badge ${st === "finalizada" ? "b-ok" : st === "reiniciada" ? "b-critica" : "b-pend"}">${audTxt[st]}</span>`;
+  return `<div class="panel"><h2>Histórico de auditorias</h2><div class="filters">
+    <input type="month" data-hist="mes" value="${h.mes}" aria-label="Mês">
+    <select data-hist="auditor" aria-label="Auditor"><option value="">Auditor: todos</option>${auditores.map(x => `<option ${h.auditor === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
+    <select data-hist="status" aria-label="Status"><option value="">Status: todos</option>${Object.entries(audTxt).map(([v, t]) => `<option value="${v}" ${h.status === v ? "selected" : ""}>${t}</option>`).join("")}</select></div>
+  <div class="row" style="margin-bottom:12px"><span class="muted">${l.length} auditoria(s)</span><button class="btn sm sp" data-act="csv-mes">CSV do mês</button><button class="btn sm" data-act="csv-tudo">CSV de tudo</button></div>
+  ${l.length ? l.map(a => {
+    const ab = h.aberto[a.id];
+    return `<div class="hist ${ab ? "open" : ""}"><div class="row">
+      <button class="histhead" data-act="hist-abrir" data-id="${a.id}" aria-expanded="${!!ab}"><b class="cond" style="font-size:18px">${brData(a.data)}</b> <span>${esc(a.colaborador_nome)}</span> ${badge(a.status)}
+        <span class="muted s">${horaDe(a.horario_inicio)}–${horaDe(a.horario_finalizacao)} · ${duracao(a.horario_inicio, a.horario_finalizacao)} · ${a.total_ocorrencias || 0} ocorr. · ${a.total_pendencias_conferidas || 0} conf.</span></button>
+      <div class="sp row">${a.status === "finalizada" ? `<button class="btn sm dark" data-act="docx" data-id="${a.id}">${a.relatorio_gerado_em ? "Baixar .docx" : "Gerar .docx"}</button>` : ""}<button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir</button></div></div>
+      ${ab ? `<div class="histbody">
+        ${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}${a.auditoria_original_id ? `<p class="muted">Reinício da auditoria ${esc(a.auditoria_original_id)}</p>` : ""}
+        <div class="tw"><table><thead><tr><th>Setor</th><th>Status</th><th>Abertura</th><th>Conclusão</th><th>Ocorr.</th></tr></thead><tbody>${ab.setores.map(s => `<tr><td>${esc(s.setor_nome)}</td><td>${stTxt[s.status]}</td><td>${horaDe(s.horario_inicio)}</td><td>${horaDe(s.horario_conclusao)}</td><td>${s.ocorrencias_count || 0}</td></tr>`).join("")}</tbody></table></div>
+        ${ab.ocs.length ? ab.ocs.map(o => ocCard(o)).join("") : `<p class="muted">Sem ocorrências.</p>`}</div>` : ""}</div>`;
+  }).join("") : `<p class="muted">Nenhuma auditoria com esses filtros.</p>`}</div>`;
+}
 function admCfg() {
   const c = S.config;
   return `<div class="panel"><h2>Configuração do relatório</h2>
   <div class="field"><label for="cfNome">Nome da empresa</label><input id="cfNome" value="${esc(c.empresa_nome ?? "Lojas MM · CDAM")}"></div>
   <div class="field"><label for="cfSub">Subtítulo do relatório</label><input id="cfSub" value="${esc(c.empresa_subtitulo ?? "Relatório de auditoria operacional diária")}"></div>
   <div class="field"><label><input type="checkbox" id="cfFoto" ${c.foto_obrigatoria !== false ? "checked" : ""}> Foto obrigatória ao registrar ocorrência</label></div>
-  <p class="muted" style="font-size:14px">O envio do logo entra na fase 4, junto com o relatório Word.</p>
+  <div class="field"><label>Logo do relatório</label><div class="row">${S.logo === undefined ? `<span class="muted">Carregando…</span>` : S.logo ? `<img src="${S.logo}" alt="Logo atual" class="logoprev"><button class="btn sm" data-act="logo">Trocar logo</button><button class="btn sm danger" data-act="logo-del">Remover</button>` : `<span class="muted">Nenhum logo</span><button class="btn sm" data-act="logo">Enviar logo</button>`}</div>
+  <p class="muted" style="font-size:13px;margin:4px 0 0">PNG com fundo transparente fica melhor. A imagem é reduzida automaticamente.</p></div>
   <button class="btn primary" data-act="cfg">Salvar configuração</button></div>`;
 }
 
@@ -1114,7 +1441,7 @@ document.addEventListener("click", e => {
   switch (a) {
     case "modo": S.modo = d.v; break;
     case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); if (d.v === "pend") return acao(carregarTodas); break;
-    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); break;
+    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "cfg" && S.logo === undefined) return acao(carregarLogo); break;
     case "go-main": S.view = "main"; break;
     case "go-admin": S.view = "admin"; if (S.isAdmin && S.adminTab === "prog") return acao(carregarProg); break;
     case "sair": return acao(sair);
@@ -1150,6 +1477,13 @@ document.addEventListener("click", e => {
     case "resolver": return modalResolver(d.id);
     case "salvar-resolver": return acao(salvarResolucao);
     case "recarregar-pend": return acao(carregarTodas);
+    case "docx": return acao(() => gerarRelatorioDocx(d.id));
+    case "csv-aud": return acao(() => csvDaAuditoria(d.id, d.d));
+    case "csv-mes": return acao(csvDoMes);
+    case "csv-tudo": return acao(csvTudo);
+    case "hist-abrir": return acao(() => abrirHist(d.id));
+    case "logo": $("#logoInput").value = ""; return $("#logoInput").click();
+    case "logo-del": return acao(removerLogo);
     default: return;
   }
   render();
@@ -1157,6 +1491,8 @@ document.addEventListener("click", e => {
 document.addEventListener("change", e => {
   const pf = e.target.closest("select[data-pf]");
   if (pf) return aplicarFiltro(pf);
+  const hs = e.target.closest("[data-hist]");
+  if (hs) { S.hist[hs.dataset.hist] = hs.value; if (hs.dataset.hist === "mes") { if (!hs.value) return; S.hist.auditor = ""; return acao(carregarHist); } return render(); }
   const el = e.target.closest("[data-chg]");
   if (!el) return;
   const d = el.dataset;
@@ -1171,6 +1507,7 @@ function aplicarFiltro(el) {
 document.addEventListener("input", e => { const el = e.target.closest("[data-pf]"); if (el && el.tagName === "INPUT") aplicarFiltro(el); });
 document.addEventListener("keydown", e => { if (e.key === "Enter" && (e.target.id === "lgPass" || e.target.id === "lgUser")) $("[data-act=login]")?.click(); if (e.key === "Enter" && e.target.id === "novoNome") $("[data-act=add]")?.click(); });
 $("#modal").addEventListener("click", e => { if (e.target.id === "modal" && !F) fechar(); });
+$("#logoInput").addEventListener("change", e => { const f = e.target.files?.[0]; if (f) acao(() => salvarLogo(f)); });
 $("#fotoInput").addEventListener("change", e => { const f = e.target.files?.[0]; if (f) receberFoto(f).catch(err => toast(err.userMsg || "Erro ao processar a foto.")); });
 
 // virada do dia com a página aberta
