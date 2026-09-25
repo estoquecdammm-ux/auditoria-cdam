@@ -210,6 +210,9 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .item .ordem{width:24px;height:24px;border-radius:50%;background:var(--surface-2);border:1px solid var(--line);display:grid;place-items:center;font:700 13px "Barlow Condensed",sans-serif;flex:none}
 .item.travado{opacity:.55}
 .panel.trava{border-color:var(--bad);border-width:2px}
+.dica{font-size:13px;margin:-6px 0 10px;min-height:18px;color:var(--muted)}
+.dica[data-tipo="ok"]{color:var(--ok);font-weight:600}
+.dica[data-tipo="novo"]{color:var(--warn);font-weight:600}
 </style>
 </head>
 <body>
@@ -265,6 +268,12 @@ function duracao(a, b) {
   const m = Math.round((new Date(b) - new Date(a)) / 60000);
   return `${Math.floor(m / 60)}h${pad(m % 60)}`;
 }
+
+/* ================= CADASTRO DE PRODUTOS (compartilhado) ================= */
+let PROD = null;
+import("https://estoquecdammm-ux.github.io/produtos-cdam/produtos.mjs")
+  .then(m => { PROD = m; m.carregar(); })
+  .catch(e => console.warn("Cadastro de produtos indisponível", e));
 
 /* ================= ESTADO ================= */
 const S = {
@@ -601,6 +610,7 @@ function modalRegistrar(ref = null) {
   <div class="field"><label for="oTipo">Tipo *</label><select id="oTipo"><option value="">Escolha…</option>${tipos.map(t => `<option ${ref?.tipo_ocorrencia === t ? "selected" : ""}>${esc(t)}</option>`).join("")}</select></div>
   <div class="grid g2" style="gap:8px"><div class="field"><label for="oCod">Código do produto</label><input id="oCod" placeholder="Ex.: 57087.162.0/2" autocapitalize="none" value="${val("produto_codigo")}"></div>
   <div class="field"><label for="oPDesc">Descrição do produto</label><input id="oPDesc" value="${val("produto_descricao")}"></div></div>
+  <div class="dica" id="dicaCod" aria-live="polite"></div>
   <div class="field"><label for="oLocal">Local / endereço</label><input id="oLocal" placeholder="Ex.: 3A203605" autocapitalize="characters" value="${val("local")}"></div>
   <div class="field"><label for="oDesc">O que foi encontrado *</label><textarea id="oDesc" rows="2">${val("descricao")}</textarea></div>
   <div class="field"><label>Gravidade</label>${chips("grav", [["baixa", "Baixa"], ["media", "Média"], ["alta", "Alta"], ["critica", "Crítica"]], F.grav)}</div>
@@ -612,6 +622,7 @@ function modalRegistrar(ref = null) {
   <div class="field"><label for="oObs">Observação</label><input id="oObs"></div>
   <div class="row"><button class="btn" data-act="fechar">Cancelar</button><button class="btn primary sp" data-act="salvar-oc">Salvar ocorrência</button></div>`);
   atualizarObrigatorios();
+  if (PROD) F.prod = PROD.ligarCampos($("#oCod"), $("#oPDesc"), { dica: $("#dicaCod"), sistema: "auditoria" });
 }
 function atualizarObrigatorios() {
   if (!F) return;
@@ -690,6 +701,7 @@ async function salvarOcorrencia() {
     tx.update(audRef, { total_ocorrencias: (a.data().total_ocorrencias || 0) + 1 });
     tx.update(setRef, { ocorrencias_count: (st.data().ocorrencias_count || 0) + 1 });
   });
+  if (PROD && F.prod?.deveAprender()) PROD.aprender(dd.cod, dd.pdesc, "auditoria").catch(() => {});
   fechar(); F = null;
   toast(`Ocorrência ${numero} registrada` + (ref ? ` · continuação de ${ref.numero}` : prev ? ` · reincidência de ${prev.numero}` : ""));
 }
@@ -1645,7 +1657,10 @@ function blocoPendHoje() {
 }
 function telaSetor() {
   const s = S.audSet.find(x => x.id === S.setorAtual);
-  if (!s) { S.view = "main"; return ""; }
+  if (!s) {
+    if (!S.audSet.length && S.aud) return `<button class="back" data-act="voltar">‹ Voltar para a auditoria</button><div class="panel">Carregando setor…</div>`;
+    S.view = "main"; return "";
+  }
   const aberto = S.aud?.status === "em_andamento" && s.status !== "concluido";
   const ocs = S.ocsHoje.filter(o => o.auditoria_setor_id === s.id);
   const pends = pendDoSetor(s.setor_id), falta = faltaNoSetor(s.setor_id), podeConf = aberto && S.aud?.status === "em_andamento";
