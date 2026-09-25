@@ -1,0 +1,801 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1F2A44">
+<title>Auditoria Operacional · CDAM</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📋</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#EEF1F5; --surface:#FFFFFF; --surface-2:#F6F8FB; --ink:#1B2433; --muted:#5E6A7D; --line:#D8DEE7;
+  --navy:#1F2A44; --navy-ink:#FFFFFF; --yellow:#F2B705; --stripe-dark:#22262E;
+  --ok:#1E8E5A; --ok-bg:#DDF3E8; --warn:#B7791F; --warn-bg:#FDF0D5; --bad:#C0392B; --bad-bg:#FBE1DE; --info:#2C6CB0; --info-bg:#DCE9F7;
+  --crit:#7A1FA2; --crit-bg:#F0DEF7;
+  box-sizing:border-box; padding-top:env(safe-area-inset-top,0px); padding-bottom:env(safe-area-inset-bottom,0px);
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12161E; --surface:#1B212C; --surface-2:#222A37; --ink:#E7ECF3; --muted:#9AA6B8; --line:#2F3847;
+  --navy:#0E1420; --ok-bg:#16372A; --warn-bg:#3A2E14; --bad-bg:#3D1C19; --info-bg:#172C44; --crit-bg:#2F1A3B;
+}}
+:root[data-theme="dark"]{
+  --bg:#12161E; --surface:#1B212C; --surface-2:#222A37; --ink:#E7ECF3; --muted:#9AA6B8; --line:#2F3847;
+  --navy:#0E1420; --ok-bg:#16372A; --warn-bg:#3A2E14; --bad-bg:#3D1C19; --info-bg:#172C44; --crit-bg:#2F1A3B;
+}
+*,*::before,*::after{box-sizing:border-box}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Barlow",system-ui,-apple-system,"Segoe UI",sans-serif}
+h1,h2,h3,.cond{font-family:"Barlow Condensed","Arial Narrow",sans-serif;letter-spacing:.01em;margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:3px solid var(--yellow);outline-offset:2px}
+.app-container{max-width:1400px;margin:0 auto;padding:0 16px 48px}
+
+/* topo */
+.top{background:var(--navy);color:var(--navy-ink);position:sticky;top:env(safe-area-inset-top,0px);z-index:20}
+.top-in{max-width:1400px;margin:0 auto;padding:10px 16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:10px;margin-right:auto}
+.brand-mark{width:34px;height:34px;border-radius:8px;background:var(--yellow);color:var(--stripe-dark);display:grid;place-items:center;font:800 18px "Barlow Condensed",sans-serif}
+.brand b{font:700 20px/1 "Barlow Condensed",sans-serif;display:block}
+.brand small{opacity:.7;font-size:12px}
+.nav a{color:var(--navy-ink);opacity:.75;text-decoration:none;padding:6px 10px;border-radius:6px;font-weight:600;font-size:14px}
+.nav a.on{opacity:1;background:rgba(255,255,255,.12)}
+.mode{display:flex;background:rgba(255,255,255,.1);border-radius:999px;padding:3px}
+.mode button{border:0;background:transparent;color:var(--navy-ink);padding:6px 14px;border-radius:999px;font-weight:600;font-size:14px}
+.mode button.on{background:var(--navy-ink);color:var(--navy)}
+.mode button.on.exec{background:var(--yellow);color:var(--stripe-dark)}
+.tape{height:8px;background:repeating-linear-gradient(-45deg,var(--yellow) 0 12px,var(--stripe-dark) 12px 24px);display:none}
+body.exec .tape{display:block}
+
+/* abas */
+.tabs{display:flex;gap:4px;overflow-x:auto;margin:16px 0;border-bottom:2px solid var(--line)}
+.tabs button{border:0;background:none;padding:10px 14px;font-weight:600;color:var(--muted);border-bottom:3px solid transparent;margin-bottom:-2px;white-space:nowrap}
+.tabs button.on{color:var(--ink);border-color:var(--yellow)}
+
+/* blocos */
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:16px}
+.panel h2{font-size:22px;margin-bottom:10px}
+.grid{display:grid;gap:16px}
+@media(min-width:900px){.g2{grid-template-columns:1.1fr .9fr}.g3{grid-template-columns:repeat(3,1fr)}}
+.muted{color:var(--muted)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.sp{margin-left:auto}
+
+/* herói do dia */
+.hero{background:var(--navy);color:var(--navy-ink);border-radius:14px;padding:20px;position:relative;overflow:hidden;margin-bottom:16px}
+.hero::after{content:"";position:absolute;right:0;top:0;bottom:0;width:14px;background:repeating-linear-gradient(-45deg,var(--yellow) 0 10px,var(--stripe-dark) 10px 20px)}
+.hero .date{opacity:.75;font-size:14px}
+.hero .who{font:800 clamp(38px,9vw,64px)/1 "Barlow Condensed",sans-serif;margin:6px 0 4px}
+.hero .role{opacity:.8}
+.hero .stats{display:flex;gap:24px;margin-top:16px;flex-wrap:wrap}
+.hero .stats div{font-size:13px;opacity:.85}
+.hero .stats b{display:block;font:700 26px/1.1 "Barlow Condensed",sans-serif;opacity:1}
+
+.btn{border:0;border-radius:10px;padding:12px 18px;font-weight:700;background:var(--surface-2);border:1px solid var(--line)}
+.btn.primary{background:var(--yellow);color:var(--stripe-dark);border-color:transparent}
+.btn.dark{background:var(--navy);color:var(--navy-ink);border-color:transparent}
+.btn.danger{background:var(--bad-bg);color:var(--bad);border-color:transparent}
+.btn.sm{padding:7px 12px;font-size:14px;border-radius:8px}
+.btn.block{width:100%;padding:16px;font-size:17px}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.exec-only{display:none!important}
+body.exec .exec-only{display:revert!important}
+body.exec .exec-only.btn{display:inline-block!important}
+body.exec .exec-only.btn.block{display:block!important}
+
+.bar{height:10px;background:var(--surface-2);border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+.bar i{display:block;height:100%;background:var(--ok);transition:width .3s}
+.prog{margin-bottom:12px}
+.prog .row{font-size:14px;margin-bottom:4px}
+
+/* listas */
+.item{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.item:first-of-type{border-top:0}
+.item .t{font-weight:600}
+.item .s{font-size:13px;color:var(--muted)}
+.dot{width:12px;height:12px;border-radius:50%;flex:none;border:2px solid var(--line)}
+.dot.em_andamento{background:var(--warn);border-color:var(--warn)}
+.dot.concluido{background:var(--ok);border-color:var(--ok)}
+.badge{display:inline-block;font-size:12px;font-weight:700;padding:2px 8px;border-radius:6px;white-space:nowrap}
+.b-baixa{background:var(--info-bg);color:var(--info)}
+.b-media{background:var(--warn-bg);color:var(--warn)}
+.b-alta{background:var(--bad-bg);color:var(--bad)}
+.b-critica{background:var(--crit-bg);color:var(--crit)}
+.b-ok{background:var(--ok-bg);color:var(--ok)}
+.b-pend{background:var(--warn-bg);color:var(--warn)}
+.b-neutral{background:var(--surface-2);color:var(--muted);border:1px solid var(--line)}
+
+.pend{border:1px solid var(--line);border-left:5px solid var(--warn);border-radius:10px;padding:12px;margin-bottom:10px;background:var(--surface)}
+.pend.done{border-left-color:var(--ok)}
+.pend .num{font:700 18px "Barlow Condensed",sans-serif}
+.photo{width:72px;height:72px;border-radius:8px;background:var(--surface-2);border:1px dashed var(--line);display:grid;place-items:center;font-size:11px;color:var(--muted);flex:none}
+
+/* semana */
+.week{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.day{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface-2);min-height:96px;font-size:13px}
+.day.today{border:2px solid var(--yellow);background:var(--surface)}
+.day b{display:block;font:700 16px "Barlow Condensed",sans-serif}
+@media(max-width:560px){.week{grid-template-columns:1fr}.day{min-height:auto;display:flex;gap:10px;align-items:center}}
+
+/* mês */
+.month{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;font-size:13px}
+.month .h{font-weight:700;color:var(--muted);text-align:center;padding:4px}
+.month .c{aspect-ratio:1;border-radius:8px;padding:4px;background:var(--surface-2);border:1px solid var(--line);position:relative}
+.month .c.x{visibility:hidden}
+.month .c i{position:absolute;left:4px;right:4px;bottom:4px;height:5px;border-radius:3px}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:13px;margin-top:10px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:5px;background:var(--c)}
+
+/* kpi */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px}
+.kpi b{font:800 34px/1 "Barlow Condensed",sans-serif;display:block}
+.kpi span{font-size:13px;color:var(--muted)}
+.hbar{display:grid;grid-template-columns:130px 1fr 36px;gap:8px;align-items:center;font-size:14px;margin:6px 0}
+.hbar div{height:14px;border-radius:4px;background:var(--navy)}
+:root[data-theme="dark"] .hbar div{background:var(--yellow)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .hbar div{background:var(--yellow)}}
+
+/* filtros */
+.filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin-bottom:12px}
+.filters input,.filters select,.field input,.field select,.field textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)}
+
+/* tabela */
+.tw{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600}
+
+/* modal */
+.modal{position:fixed;inset:0;background:rgba(10,14,22,.55);display:none;align-items:flex-end;justify-content:center;z-index:50}
+.modal.open{display:flex}
+.sheet{background:var(--surface);width:100%;max-width:560px;max-height:92vh;overflow:auto;border-radius:16px 16px 0 0;padding:20px;padding-bottom:calc(20px + env(safe-area-inset-bottom,0px))}
+@media(min-width:700px){.modal{align-items:center}.sheet{border-radius:16px}}
+.sheet h2{font-size:24px;margin-bottom:12px}
+.field{margin-bottom:12px}
+.field label{display:block;font-weight:600;font-size:14px;margin-bottom:4px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chips button{border:1px solid var(--line);background:var(--surface-2);padding:8px 12px;border-radius:999px;font-weight:600;font-size:14px}
+.chips button.on{background:var(--navy);color:var(--navy-ink);border-color:var(--navy)}
+.auto{font-size:13px;color:var(--muted);background:var(--surface-2);border-radius:8px;padding:8px 10px;margin-bottom:12px}
+
+.back{border:0;background:none;color:var(--muted);font-weight:600;padding:12px 0}
+.note{background:var(--warn-bg);color:var(--ink);border-radius:10px;padding:10px 12px;font-size:14px;margin-bottom:12px}
+.toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--navy);color:var(--navy-ink);padding:10px 16px;border-radius:10px;font-weight:600;display:none;z-index:60}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+
+.login{max-width:420px;margin:32px auto}
+.field input,.field textarea{background:var(--surface-2)}
+body.busy{cursor:progress}
+body.busy .btn{pointer-events:none;opacity:.7}
+.month .c.today-c{border:2px solid var(--yellow)}
+.nav a#navSair{opacity:.6}
+.credito{text-align:center;font-size:10px;opacity:.18;margin-top:32px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top-in">
+    <div class="brand"><div class="brand-mark">MM</div><div><b>Auditoria Operacional</b><small>CDAM · filial 083</small></div></div>
+    <nav class="nav"><a href="#" data-act="go-main" id="navMain" class="on">Auditoria por setores</a><a href="#" data-act="go-admin" id="navAdmin">Painel administrativo</a><a href="#" data-act="sair" id="navSair" style="display:none">Sair</a></nav>
+    <div class="mode" id="modeBox"><button data-act="modo" data-v="ver" class="on">Visualizar</button><button data-act="modo" data-v="exec" class="exec">Executar</button></div>
+  </div>
+  <div class="tape" aria-hidden="true"></div>
+</header>
+<main class="app-container" id="app"></main>
+<p class="credito">Mateus Przibiovicz</p>
+<div class="modal" id="modal"><div class="sheet" id="sheet"></div></div>
+<div class="toast" id="toast"></div>
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, onAuthStateChanged, signInAnonymously, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, addDoc, query, where, orderBy, limit, onSnapshot, runTransaction, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyD7Xx6yX9xXRjc2VnEqQv0Bfarwhli5bCA",
+  authDomain: "auditoria-cdam.firebaseapp.com",
+  projectId: "auditoria-cdam",
+  storageBucket: "auditoria-cdam.firebasestorage.app",
+  messagingSenderId: "51456289260",
+  appId: "1:51456289260:web:18ad0b73a1602f1c3638c9"
+};
+const fb = initializeApp(firebaseConfig);
+const auth = getAuth(fb);
+const db = getFirestore(fb);
+const DOMINIO = "@auditoria-cdam.app";
+
+/* ================= DATA E HORA (sempre UTC-3, nunca toISOString do "agora") ================= */
+const pad = n => String(n).padStart(2, "0");
+const agoraBR = () => new Date(Date.now() - 3 * 3600 * 1000);
+function todayStr() { const d = agoraBR(); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`; }
+function nowISO() { const d = agoraBR(); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}-03:00`; }
+const horaDe = iso => iso ? iso.slice(11, 16) : "--:--";
+// datas "AAAA-MM-DD" tratadas ao meio-dia UTC (aritmética de calendário, sem fuso)
+const parseD = s => new Date(s + "T12:00:00Z");
+const fmtD = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+const addDias = (s, n) => { const d = parseD(s); d.setUTCDate(d.getUTCDate() + n); return fmtD(d); };
+const dow = s => parseD(s).getUTCDay();
+const segundaDe = s => addDias(s, -((dow(s) + 6) % 7));
+const diaUtil = s => dow(s) >= 1 && dow(s) <= 5;
+const DIAS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
+const brData = s => s ? s.split("-").reverse().join("/") : "";
+function duracao(a, b) {
+  if (!a || !b) return "—";
+  const m = Math.round((new Date(b) - new Date(a)) / 60000);
+  return `${Math.floor(m / 60)}h${pad(m % 60)}`;
+}
+
+/* ================= ESTADO ================= */
+const S = {
+  pronto: false, user: null, isAdmin: false, adminNome: "",
+  modo: "ver", view: "main", tab: "hoje", adminTab: "prog", setorAtual: null,
+  setores: [], tipos: [], colabs: [], config: {},
+  hoje: todayStr(), atrib: null, semana: [], semanaAuds: {},
+  audsHoje: [], aud: null, audSet: [],
+  mes: todayStr().slice(0, 7), mesAuds: [], mesAtrib: {},
+  progRef: todayStr(), progDias: [], progAuds: {},
+  busy: false,
+};
+const $ = s => document.querySelector(s);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function toast(m) { const t = $("#toast"); t.textContent = m; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 2600); }
+const porOrdem = (a, b) => (a.ordem ?? 0) - (b.ordem ?? 0) || String(a.nome).localeCompare(String(b.nome));
+const stTxt = { pendente: "Pendente", em_andamento: "Em andamento", concluido: "Concluído" };
+const audTxt = { em_andamento: "Em andamento", finalizada: "Finalizada", reiniciada: "Reiniciada" };
+
+async function acao(fn) {
+  if (S.busy) return;
+  S.busy = true; document.body.classList.add("busy");
+  try { await fn(); }
+  catch (e) { console.error(e); toast(e.userMsg || ("Erro: " + (e.code || e.message))); }
+  finally { S.busy = false; document.body.classList.remove("busy"); render(); }
+}
+const falha = m => { const e = new Error(m); e.userMsg = m; return e; };
+
+/* ================= RODÍZIO ================= */
+function poolRodizio() {
+  const rot = S.colabs.filter(c => c.ativo && !c.fixo);
+  return rot.length ? rot : S.colabs.filter(c => c.ativo);
+}
+async function getAtribuicaoDoDia(data) {
+  const ref = doc(db, "atribuicoes", data);
+  const snap = await getDoc(ref);
+  if (snap.exists()) return snap.data();
+  if (!diaUtil(data)) return null;
+  const pool = poolRodizio();
+  if (!pool.length) return null;
+  const prev = await getDocs(query(collection(db, "atribuicoes"), where("data", "<", data), orderBy("data", "desc"), limit(1)));
+  let prox = pool[0];
+  if (!prev.empty) {
+    const idx = pool.findIndex(c => c.id === prev.docs[0].data().colaborador_id);
+    prox = pool[(idx + 1) % pool.length];
+  }
+  const novo = { data, dia_semana: DIAS[dow(data)], colaborador_id: prox.id, colaborador_nome: prox.nome, criado_em: nowISO(), criado_ts: serverTimestamp() };
+  return runTransaction(db, async tx => {
+    const s = await tx.get(ref);
+    if (s.exists()) return s.data();
+    tx.set(ref, novo);
+    return novo;
+  });
+}
+async function getProgramacaoSemana(ref) {
+  const seg = segundaDe(ref), dias = [];
+  for (let i = 0; i < 5; i++) {
+    const d = addDias(seg, i);
+    dias.push({ data: d, atrib: await getAtribuicaoDoDia(d) });
+  }
+  return dias;
+}
+async function audsEntre(ini, fim) {
+  const q = query(collection(db, "auditorias"), where("data", ">=", ini), where("data", "<=", fim));
+  return (await getDocs(q)).docs.map(d => ({ id: d.id, ...d.data() }));
+}
+function statusDoDia(auds, data) {
+  const l = auds.filter(a => a.data === data);
+  if (l.some(a => a.status === "finalizada")) return "ok";
+  if (l.some(a => a.status === "em_andamento")) return "and";
+  if (l.some(a => a.status === "reiniciada")) return "rei";
+  if (data < S.hoje && diaUtil(data)) return "nao";
+  return "prog";
+}
+const stDiaTxt = { ok: "Concluída", and: "Em andamento", rei: "Reiniciada", nao: "Não realizada", prog: "Programada" };
+const stDiaBadge = { ok: "b-ok", and: "b-pend", rei: "b-critica", nao: "b-alta", prog: "b-neutral" };
+const atualDe = auds => auds.filter(a => a.status !== "reiniciada").sort((a, b) => String(b.horario_inicio).localeCompare(String(a.horario_inicio)))[0] || null;
+
+/* ================= ASSINATURAS EM TEMPO REAL ================= */
+let unsubs = [], unsubAud = null, unsubSet = null, audIdAssinado = null;
+function assinarCadastros() {
+  unsubs.forEach(u => u()); unsubs = [];
+  const col = (nome, alvo) => new Promise(res => {
+    let primeira = true;
+    unsubs.push(onSnapshot(collection(db, nome), snap => {
+      S[alvo] = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort(porOrdem);
+      if (primeira) { primeira = false; res(); } else render();
+    }, e => { console.error(e); res(); }));
+  });
+  const cfg = new Promise(res => {
+    let primeira = true;
+    unsubs.push(onSnapshot(doc(db, "config", "geral"), snap => {
+      S.config = snap.exists() ? snap.data() : {};
+      if (primeira) { primeira = false; res(); } else render();
+    }, e => { console.error(e); res(); }));
+  });
+  return Promise.all([col("setores", "setores"), col("tipos", "tipos"), col("colaboradores", "colabs"), cfg]);
+}
+function assinarHoje() {
+  if (unsubAud) unsubAud();
+  audIdAssinado = undefined;
+  unsubAud = onSnapshot(query(collection(db, "auditorias"), where("data", "==", S.hoje)), snap => {
+    S.audsHoje = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    S.aud = atualDe(S.audsHoje);
+    S.semanaAuds[S.hoje] = S.audsHoje;
+    assinarSetores(S.aud?.id || null);
+    render();
+  }, e => console.error(e));
+}
+function assinarSetores(id) {
+  if (id === audIdAssinado) return;
+  audIdAssinado = id;
+  if (unsubSet) { unsubSet(); unsubSet = null; }
+  S.audSet = [];
+  if (!id) return;
+  unsubSet = onSnapshot(query(collection(db, "auditoria_setores"), where("auditoria_id", "==", id)), snap => {
+    S.audSet = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort(porOrdem);
+    render();
+  }, e => console.error(e));
+}
+async function carregarDia() {
+  S.hoje = todayStr();
+  // semana sempre montada de segunda a sexta, em ordem, para o rodízio não pular ninguém
+  S.semana = await getProgramacaoSemana(S.hoje);
+  S.atrib = S.semana.find(d => d.data === S.hoje)?.atrib || null;
+  const seg = segundaDe(S.hoje), auds = await audsEntre(seg, addDias(seg, 4));
+  S.semanaAuds = {};
+  auds.forEach(a => (S.semanaAuds[a.data] ||= []).push(a));
+  assinarHoje();
+}
+
+/* ================= AÇÕES DA AUDITORIA ================= */
+function novaAuditoriaDados(id, origem) {
+  const ativos = S.setores.filter(s => s.ativo);
+  return {
+    aud: {
+      data: S.hoje, dia_semana: DIAS[dow(S.hoje)],
+      colaborador_id: S.atrib.colaborador_id, colaborador_nome: S.atrib.colaborador_nome,
+      status: "em_andamento", horario_inicio: nowISO(), horario_finalizacao: null,
+      total_setores: ativos.length, setores_concluidos: 0, total_ocorrencias: 0, total_pendencias_conferidas: 0,
+      observacao_final: "", auditoria_original_id: origem || null,
+      relatorio_docx_url: null, relatorio_gerado_em: null,
+      iniciado_por_uid: S.user.uid, criado_ts: serverTimestamp(),
+    },
+    setores: ativos.map((s, i) => ({
+      id: `${id}_${s.id}`,
+      dados: { auditoria_id: id, auditoria_data: S.hoje, setor_id: s.id, setor_nome: s.nome, ordem: i, status: "pendente", horario_inicio: null, horario_conclusao: null, ocorrencias_count: 0 },
+    })),
+  };
+}
+async function iniciar() {
+  if (!S.atrib) throw falha("Sem responsável definido para hoje.");
+  if (!S.setores.some(s => s.ativo)) throw falha("Nenhum setor ativo cadastrado. Cadastre no Painel administrativo.");
+  if (S.aud) throw falha("A auditoria de hoje já foi iniciada.");
+  const id = S.audsHoje.length ? `${S.hoje}_R${S.audsHoje.length}` : S.hoje;
+  const ref = doc(db, "auditorias", id);
+  const { aud, setores } = novaAuditoriaDados(id, null);
+  await runTransaction(db, async tx => {
+    if ((await tx.get(ref)).exists()) throw falha("Outra pessoa acabou de iniciar a auditoria. A tela vai atualizar.");
+    tx.set(ref, aud);
+    setores.forEach(s => tx.set(doc(db, "auditoria_setores", s.id), s.dados));
+  });
+  toast("Auditoria iniciada às " + horaDe(aud.horario_inicio));
+}
+async function abrirSetor(setId) {
+  const s = S.audSet.find(x => x.id === setId);
+  if (!s) return;
+  S.setorAtual = setId; S.view = "setor"; scrollTo(0, 0);
+  if (S.modo === "exec" && s.status === "pendente" && S.aud?.status === "em_andamento")
+    await updateDoc(doc(db, "auditoria_setores", setId), { status: "em_andamento", horario_inicio: nowISO() });
+}
+async function concluirSetor() {
+  const ref = doc(db, "auditoria_setores", S.setorAtual);
+  const audRef = doc(db, "auditorias", S.aud.id);
+  let nome = "";
+  await runTransaction(db, async tx => {
+    const s = await tx.get(ref), a = await tx.get(audRef);
+    if (!s.exists() || !a.exists()) throw falha("Auditoria não encontrada.");
+    if (a.data().status !== "em_andamento") throw falha("Esta auditoria não está mais em andamento.");
+    if (s.data().status === "concluido") return;
+    nome = s.data().setor_nome;
+    tx.update(ref, { status: "concluido", horario_conclusao: nowISO(), horario_inicio: s.data().horario_inicio || nowISO() });
+    tx.update(audRef, { setores_concluidos: (a.data().setores_concluidos || 0) + 1 });
+  });
+  S.view = "main";
+  if (nome) toast(nome + " concluído às " + horaDe(nowISO()));
+}
+function podeFinalizar() { return S.aud?.status === "em_andamento" && S.audSet.length > 0 && S.audSet.every(s => s.status === "concluido"); }
+async function finalizar(obs) {
+  if (!podeFinalizar()) throw falha("Ainda há setores pendentes.");
+  await updateDoc(doc(db, "auditorias", S.aud.id), {
+    status: "finalizada", horario_finalizacao: nowISO(), observacao_final: obs || "",
+    setores_concluidos: S.audSet.filter(s => s.status === "concluido").length,
+  });
+  toast("Auditoria finalizada");
+}
+async function reiniciar() {
+  if (!S.isAdmin || !S.aud) return;
+  if (!confirm("Reiniciar a auditoria de hoje? A atual fica no histórico como reiniciada e uma nova começa do zero.")) return;
+  const velho = S.aud;
+  const id = `${S.hoje}_R${S.audsHoje.length}`;
+  const { aud, setores } = novaAuditoriaDados(id, velho.id);
+  await runTransaction(db, async tx => {
+    const ref = doc(db, "auditorias", id);
+    if ((await tx.get(ref)).exists()) throw falha("Conflito ao reiniciar. Tente novamente.");
+    tx.update(doc(db, "auditorias", velho.id), { status: "reiniciada", reiniciada_em: nowISO(), reiniciada_por: S.adminNome });
+    tx.set(ref, aud);
+    setores.forEach(s => tx.set(doc(db, "auditoria_setores", s.id), s.dados));
+  });
+  S.view = "main";
+  toast("Auditoria reiniciada");
+}
+async function excluirAuditoria(id) {
+  if (!S.isAdmin) return;
+  const a = [...S.audsHoje, ...S.mesAuds].find(x => x.id === id);
+  if (!confirm(`Excluir a auditoria ${a ? brData(a.data) + " de " + a.colaborador_nome : id}?\n\nApaga só esta auditoria e os registros dela (setores, ocorrências, conferências). Cadastros e outras auditorias não são afetados.`)) return;
+  const refs = [];
+  for (const col of ["auditoria_setores", "ocorrencias", "verificacoes"]) {
+    const snap = await getDocs(query(collection(db, col), where("auditoria_id", "==", id)));
+    snap.docs.forEach(d => refs.push(d.ref));
+  }
+  refs.push(doc(db, "auditorias", id));
+  for (let i = 0; i < refs.length; i += 400) {
+    const b = writeBatch(db);
+    refs.slice(i, i + 400).forEach(r => b.delete(r));
+    await b.commit();
+  }
+  S.mesAuds = S.mesAuds.filter(x => x.id !== id);
+  S.view = "main";
+  toast("Auditoria excluída");
+}
+
+/* ================= ADMIN: LOGIN ================= */
+async function entrarAdmin(usuario, senha) {
+  usuario = usuario.trim().toLowerCase();
+  if (!usuario || !senha) throw falha("Informe usuário e senha.");
+  try { await signInWithEmailAndPassword(auth, usuario + DOMINIO, senha); }
+  catch (e) { throw falha("Usuário ou senha incorretos."); }
+}
+async function sair() { await signOut(auth); S.view = "main"; }
+
+/* ================= ADMIN: PROGRAMAÇÃO ================= */
+async function carregarProg() {
+  S.progDias = await getProgramacaoSemana(S.progRef);
+  const seg = segundaDe(S.progRef), auds = await audsEntre(seg, addDias(seg, 4));
+  S.progAuds = {};
+  auds.forEach(a => (S.progAuds[a.data] ||= []).push(a));
+}
+async function trocarResponsavel(data, colabId) {
+  const c = S.colabs.find(x => x.id === colabId);
+  if (!c) return;
+  await setDoc(doc(db, "atribuicoes", data), { data, dia_semana: DIAS[dow(data)], colaborador_id: c.id, colaborador_nome: c.nome, alterado_por: S.adminNome, alterado_em: nowISO() }, { merge: true });
+  await carregarProg();
+  S.semana = await getProgramacaoSemana(S.hoje);
+  S.atrib = S.semana.find(d => d.data === S.hoje)?.atrib || null;
+  toast(`${brData(data)}: ${c.nome}`);
+}
+async function refazerSorteio() {
+  const livres = S.progDias.filter(d => d.data >= S.hoje && !(S.progAuds[d.data] || []).length);
+  if (!livres.length) throw falha("Nenhum dia desta semana pode ser sorteado (já passaram ou já começaram).");
+  if (!confirm(`Refazer o sorteio para ${livres.length} dia(s) ainda não iniciados desta semana?`)) return;
+  const pool = [...poolRodizio()];
+  if (!pool.length) throw falha("Nenhum colaborador ativo.");
+  for (let i = pool.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
+  const b = writeBatch(db);
+  livres.forEach((d, i) => {
+    const c = pool[i % pool.length];
+    b.set(doc(db, "atribuicoes", d.data), { data: d.data, dia_semana: DIAS[dow(d.data)], colaborador_id: c.id, colaborador_nome: c.nome, alterado_por: S.adminNome, alterado_em: nowISO(), sorteio: true }, { merge: true });
+  });
+  await b.commit();
+  await carregarProg();
+  S.semana = await getProgramacaoSemana(S.hoje);
+  S.atrib = S.semana.find(d => d.data === S.hoje)?.atrib || null;
+  toast("Sorteio refeito");
+}
+
+/* ================= ADMIN: CADASTROS ================= */
+const COLS = { set: ["setores", "setores", "Setores"], tip: ["tipos", "tipos", "Tipos de ocorrência"], col: ["colaboradores", "colabs", "Colaboradores"] };
+async function addCad(k, nome) {
+  nome = nome.trim();
+  if (!nome) throw falha("Digite um nome.");
+  const [col, alvo] = COLS[k];
+  if (S[alvo].some(x => x.nome.toLowerCase() === nome.toLowerCase())) throw falha("Já existe um cadastro com esse nome.");
+  const ordem = Math.max(0, ...S[alvo].map(x => x.ordem || 0)) + 1;
+  const dados = { nome, ativo: true, ordem, criado_em: nowISO() };
+  if (k === "col") dados.fixo = false;
+  await addDoc(collection(db, col), dados);
+}
+async function updCad(k, id, campos) { await updateDoc(doc(db, COLS[k][0], id), campos); }
+async function moverCad(k, id, dir) {
+  const lista = S[COLS[k][1]], i = lista.findIndex(x => x.id === id), j = i + dir;
+  if (j < 0 || j >= lista.length) return;
+  const b = writeBatch(db);
+  lista.forEach((x, n) => { let o = n + 1; if (n === i) o = j + 1; if (n === j) o = i + 1; b.update(doc(db, COLS[k][0], x.id), { ordem: o }); });
+  await b.commit();
+}
+async function delCad(k, id) {
+  const x = S[COLS[k][1]].find(y => y.id === id);
+  if (!confirm(`Excluir "${x?.nome}"?\n\nAuditorias antigas continuam mostrando o nome. Se quiser só tirar de uso, prefira desativar.`)) return;
+  await deleteDoc(doc(db, COLS[k][0], id));
+}
+async function criarPadrao() {
+  const b = writeBatch(db);
+  ["Recebimento (1R/6R)", "Armazenagem 3A", "Picking", "Túneis", "Staging 4P", "Expedição 4X"].forEach((n, i) => { if (!S.setores.length) b.set(doc(collection(db, "setores")), { nome: n, ativo: true, ordem: i + 1, criado_em: nowISO() }); });
+  ["Produto fora do endereço", "Avaria", "Endereço sem identificação", "Volume incompleto", "Obstrução de corredor", "Palete mal armazenado", "Limpeza"].forEach((n, i) => { if (!S.tipos.length) b.set(doc(collection(db, "tipos")), { nome: n, ativo: true, ordem: i + 1, criado_em: nowISO() }); });
+  await b.commit();
+  toast("Setores e tipos padrão criados");
+}
+async function salvarConfig(dados) {
+  await setDoc(doc(db, "config", "geral"), { ...dados, alterado_por: S.adminNome, alterado_em: nowISO() }, { merge: true });
+  toast("Configuração salva");
+}
+
+/* ================= DIAS (mês) ================= */
+async function carregarMes() {
+  const ini = S.mes + "-01", fim = S.mes + "-31";
+  S.mesAuds = await audsEntre(ini, fim);
+  const snap = await getDocs(query(collection(db, "atribuicoes"), where("data", ">=", ini), where("data", "<=", fim)));
+  S.mesAtrib = {};
+  snap.docs.forEach(d => S.mesAtrib[d.id] = d.data());
+}
+
+/* ================= RENDER ================= */
+function render() {
+  document.body.classList.toggle("exec", S.modo === "exec" && S.view !== "admin");
+  document.querySelectorAll("#modeBox button").forEach(b => b.classList.toggle("on", b.dataset.v === S.modo));
+  $("#navMain").classList.toggle("on", S.view !== "admin");
+  $("#navAdmin").classList.toggle("on", S.view === "admin");
+  $("#modeBox").style.visibility = S.view === "admin" ? "hidden" : "visible";
+  $("#navSair").style.display = S.isAdmin ? "" : "none";
+  $("#navSair").textContent = "Sair (" + S.adminNome + ")";
+  if (!S.pronto) return $("#app").innerHTML = `<div class="panel" style="margin-top:24px">Carregando…</div>`;
+  if (S.view === "setor") return $("#app").innerHTML = telaSetor();
+  if (S.view === "admin") return $("#app").innerHTML = S.isAdmin ? telaAdmin() : telaLogin();
+  const tabs = [["hoje", "Auditoria de hoje"], ["pend", "Pendências"], ["dias", "Dias"], ["ind", "Indicadores"], ["def", "Definições"]];
+  $("#app").innerHTML = `<div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button data-act="tab" data-v="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>`
+    + ({ hoje: tabHoje, pend: () => emBreve("Pendências", "Chega na fase 3, junto com a conferência de pendências."), dias: tabDias, ind: () => emBreve("Indicadores", "Chega na fase 5, quando já houver ocorrências registradas."), def: tabDef })[S.tab]();
+}
+const emBreve = (t, m) => `<div class="panel"><h2>${t}</h2><p class="muted">${m}</p></div>`;
+
+function semanaHtml(dias, audsMap, destacarHoje = true) {
+  return `<div class="week">${dias.map(d => {
+    const st = statusDoDia(audsMap[d.data] || [], d.data), isHoje = d.data === S.hoje;
+    return `<div class="day ${isHoje && destacarHoje ? "today" : ""}"><b>${DIAS[dow(d.data)].slice(0, 3)} ${d.data.slice(8)}</b><div>${esc(d.atrib?.colaborador_nome || "Sem responsável")}</div><div style="margin-top:4px"><span class="badge ${stDiaBadge[st]}">${stDiaTxt[st]}</span></div>
+      ${isHoje && !S.aud && S.atrib ? `<button class="btn sm primary exec-only" style="margin-top:6px" data-act="iniciar">Iniciar</button>` : ""}</div>`;
+  }).join("")}</div>`;
+}
+
+function tabHoje() {
+  const a = S.aud, concl = S.audSet.filter(s => s.status === "concluido").length, tot = S.audSet.length;
+  const status = a ? audTxt[a.status] : "Não iniciada";
+  const semColab = !S.colabs.some(c => c.ativo);
+  let quem = S.atrib?.colaborador_nome || (!diaUtil(S.hoje) ? "Sem ronda hoje" : semColab ? "Sem colaboradores" : "—");
+  const hero = `<section class="hero">
+    <div class="date">${DIAS[dow(S.hoje)]}, ${brData(S.hoje)} · ${status}</div>
+    <div class="who">${esc(a?.colaborador_nome || quem)}</div>
+    <div class="role">${!diaUtil(S.hoje) ? "Fim de semana: o rodízio vale de segunda a sexta" : semColab ? "Cadastre colaboradores no Painel administrativo" : "Responsável pela ronda de hoje, definido pelo rodízio"}</div>
+    <div class="stats">
+      <div><b>${horaDe(a?.horario_inicio)}</b>Início</div>
+      <div><b>${horaDe(a?.horario_finalizacao)}</b>Finalização</div>
+      <div><b>${a ? concl + "/" + tot : "—"}</b>Setores</div>
+      <div><b>${a?.total_ocorrencias ?? 0}</b>Ocorrências hoje</div>
+    </div></section>`;
+  let acaoHtml = "";
+  if (!a && S.atrib) acaoHtml = `<button class="btn primary block exec-only" data-act="iniciar">Iniciar auditoria</button><p class="muted" style="text-align:center">${S.modo === "ver" ? "Mude para Executar para iniciar a ronda." : "O horário de início é registrado automaticamente."}</p>`;
+  else if (a?.status === "finalizada") acaoHtml = `<div class="panel"><h2>Auditoria finalizada às ${horaDe(a.horario_finalizacao)}</h2>${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}<p class="muted">Duração: ${duracao(a.horario_inicio, a.horario_finalizacao)}</p><div class="row"><button class="btn dark" data-act="msg" data-m="O relatório Word chega na fase 4">Baixar relatório Word</button></div></div>`;
+
+  const setHtml = a ? `<div class="panel"><h2>Setores</h2>
+    <div class="prog"><div class="row"><span>Setores concluídos</span><span class="sp">${concl}/${tot}</span></div><div class="bar"><i style="width:${tot ? concl / tot * 100 : 0}%"></i></div></div>
+    ${S.audSet.map(s => `<div class="item"><span class="dot ${s.status}"></span><div><div class="t">${esc(s.setor_nome)}</div><div class="s">${stTxt[s.status]}${s.horario_conclusao ? " às " + horaDe(s.horario_conclusao) : ""}</div></div>
+      ${a.status === "em_andamento" ? `<button class="btn sm exec-only sp" data-act="abrir-setor" data-id="${s.id}">Abrir setor</button>` : ""}</div>`).join("")}
+    ${a.status === "em_andamento" ? `<div style="margin-top:14px" class="exec-only"><button class="btn primary block" data-act="finalizar" ${podeFinalizar() ? "" : "disabled"}>Finalizar auditoria</button>
+      ${podeFinalizar() ? "" : '<p class="muted" style="text-align:center;margin:6px 0 0;font-size:14px">Conclua todos os setores para liberar.</p>'}</div>` : ""}
+  </div>` : `<div class="panel"><h2>Setores</h2><p class="muted">A lista aparece quando a auditoria for iniciada.</p>${S.setores.filter(s => s.ativo).map(s => `<div class="item"><span class="dot"></span><div class="t">${esc(s.nome)}</div></div>`).join("")}</div>`;
+
+  const lider = S.isAdmin && a ? `<div class="panel exec-only"><h2>Ações do líder</h2><div class="row"><button class="btn sm" data-act="reiniciar">Reiniciar</button><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir auditoria</button></div></div>` : "";
+
+  return hero + acaoHtml + `<div class="grid g2"><div>${setHtml}<div class="panel"><h2>Pendências de auditorias anteriores</h2><p class="muted">A conferência de pendências entra na fase 3.</p></div></div>
+    <div><div class="panel"><h2>Esta semana</h2>${semanaHtml(S.semana, S.semanaAuds)}</div>${lider}</div></div>`;
+}
+
+function telaSetor() {
+  const s = S.audSet.find(x => x.id === S.setorAtual);
+  if (!s) { S.view = "main"; return ""; }
+  const aberto = S.aud?.status === "em_andamento" && s.status !== "concluido";
+  return `<button class="back" data-act="voltar">‹ Voltar para a auditoria</button>
+  <section class="hero" style="padding:16px 20px"><div class="date">Setor · ${stTxt[s.status]}${s.horario_inicio ? " · aberto às " + horaDe(s.horario_inicio) : ""}</div><div class="who" style="font-size:clamp(32px,7vw,48px)">${esc(s.setor_nome)}</div></section>
+  ${aberto ? `<div class="row" style="margin-bottom:16px"><button class="btn primary exec-only" data-act="msg" data-m="O registro de ocorrências chega na fase 2">Registrar ocorrência</button><button class="btn dark exec-only" data-act="concluir-setor">Concluir setor</button></div>`
+      : s.status === "concluido" ? `<div class="note">Setor concluído às ${horaDe(s.horario_conclusao)}. Não aceita novas ocorrências.</div>` : ""}
+  <div class="panel"><h2>Ocorrências neste setor</h2><p class="muted">O registro de ocorrências com fotos chega na fase 2.</p></div>`;
+}
+
+function tabDias() {
+  const [y, m] = S.mes.split("-").map(Number);
+  const first = dow(S.mes + "-01"), n = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  const cor = { ok: "var(--ok)", and: "var(--info)", rei: "var(--crit)", nao: "var(--bad)", prog: "var(--line)" };
+  let cells = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"].map(h => `<div class="h">${h}</div>`).join("");
+  for (let i = 0; i < first; i++) cells += `<div class="c x"></div>`;
+  for (let d = 1; d <= n; d++) {
+    const data = `${S.mes}-${pad(d)}`;
+    let k = "";
+    if (diaUtil(data)) {
+      k = statusDoDia(S.mesAuds, data);
+      if (k === "prog" && !S.mesAtrib[data] && data > S.hoje) k = "";
+    }
+    cells += `<div class="c${data === S.hoje ? " today-c" : ""}" title="${k ? stDiaTxt[k] : ""}">${d}${k ? `<i style="background:${cor[k]}"></i>` : ""}</div>`;
+  }
+  const nomeMes = new Date(Date.UTC(y, m - 1, 15)).toLocaleDateString("pt-BR", { month: "long", year: "numeric", timeZone: "UTC" });
+  const lista = [...S.mesAuds].sort((a, b) => b.data.localeCompare(a.data) || String(b.horario_inicio).localeCompare(String(a.horario_inicio)));
+  return `<div class="panel"><div class="row" style="margin-bottom:10px"><button class="btn sm" data-act="mes" data-v="-1">‹</button><h2 style="margin:0">${nomeMes}</h2><button class="btn sm" data-act="mes" data-v="1">›</button></div>
+  <div class="month">${cells}</div>
+  <div class="legend"><span style="--c:var(--ok)">Concluída</span><span style="--c:var(--info)">Em andamento</span><span style="--c:var(--crit)">Reiniciada</span><span style="--c:var(--bad)">Não realizada</span><span style="--c:var(--line)">Programada</span></div></div>
+  <div class="panel"><h2>Auditorias do mês</h2>${lista.length ? `<div class="tw"><table><thead><tr><th>Data</th><th>Auditor</th><th>Início</th><th>Fim</th><th>Duração</th><th>Status</th>${S.isAdmin ? "<th></th>" : ""}</tr></thead><tbody>
+  ${lista.map(a => `<tr><td>${brData(a.data)}</td><td>${esc(a.colaborador_nome)}</td><td>${horaDe(a.horario_inicio)}</td><td>${horaDe(a.horario_finalizacao)}</td><td>${duracao(a.horario_inicio, a.horario_finalizacao)}</td><td><span class="badge ${a.status === "finalizada" ? "b-ok" : a.status === "reiniciada" ? "b-critica" : "b-pend"}">${audTxt[a.status]}</span></td>${S.isAdmin ? `<td><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir</button></td>` : ""}</tr>`).join("")}
+  </tbody></table></div>` : `<p class="muted">Nenhuma auditoria neste mês.</p>`}</div>`;
+}
+
+function tabDef() {
+  const card = (t, arr) => `<div class="panel"><h2>${t}</h2>${arr.length ? arr.map(a => `<div class="item"><div class="t">${a}</div></div>`).join("") : '<p class="muted">Nada cadastrado.</p>'}</div>`;
+  return `<div class="grid g3">${card("Setores", S.setores.filter(s => s.ativo).map(s => esc(s.nome)))}${card("Tipos de ocorrência", S.tipos.filter(s => s.ativo).map(s => esc(s.nome)))}${card("Colaboradores ativos", S.colabs.filter(c => c.ativo).map(c => esc(c.nome) + (c.fixo ? ' <span class="badge b-neutral">fixo</span>' : "")))}</div><p class="muted">A edição destes cadastros fica no Painel administrativo.</p>`;
+}
+
+function telaLogin() {
+  return `<div class="panel login"><h2>Painel administrativo</h2><p class="muted">Acesso restrito aos líderes.</p>
+  <div class="field"><label for="lgUser">Usuário</label><input id="lgUser" autocomplete="username" autocapitalize="none"></div>
+  <div class="field"><label for="lgPass">Senha</label><input id="lgPass" type="password" autocomplete="current-password"></div>
+  <button class="btn primary block" data-act="login">Entrar</button></div>`;
+}
+
+function telaAdmin() {
+  const tabs = [["prog", "Programação"], ["ctrl", "Controle diário"], ["ind", "Indicadores"], ["hist", "Histórico"], ["set", "Setores"], ["tip", "Tipos"], ["col", "Colaboradores"], ["cfg", "Configuração"]];
+  const vazio = !S.setores.length || !S.tipos.length;
+  const seed = vazio ? `<div class="note" style="margin-top:16px">Ainda não há ${!S.setores.length ? "setores" : ""}${!S.setores.length && !S.tipos.length ? " nem " : ""}${!S.tipos.length ? "tipos de ocorrência" : ""} cadastrados. <button class="btn sm primary" data-act="padrao">Criar lista padrão</button></div>` : "";
+  const body = {
+    prog: admProg, ctrl: admCtrl, set: () => admCrud("set"), tip: () => admCrud("tip"), col: () => admCrud("col"), cfg: admCfg,
+    ind: () => emBreve("Indicadores", "Chega na fase 5."),
+    hist: () => emBreve("Histórico", "Chega na fase 4, junto com o relatório Word. Por enquanto, a aba Dias mostra as auditorias de cada mês."),
+  };
+  return seed + `<div class="tabs">${tabs.map(([k, l]) => `<button data-act="atab" data-v="${k}" class="${S.adminTab === k ? "on" : ""}">${l}</button>`).join("")}</div>${body[S.adminTab]()}`;
+}
+
+function admProg() {
+  if (!S.progDias.length) return `<div class="panel">Carregando programação…</div>`;
+  const seg = segundaDe(S.progRef);
+  const opts = sel => poolRodizio().concat(S.colabs.filter(c => c.ativo && c.fixo && !poolRodizio().includes(c))).map(c => `<option value="${c.id}" ${c.id === sel ? "selected" : ""}>${esc(c.nome)}${c.fixo ? " (fixo)" : ""}</option>`).join("");
+  return `<div class="panel"><div class="row"><button class="btn sm" data-act="semana" data-v="-7">‹</button><h2 style="margin:0">Semana de ${brData(seg)}</h2><button class="btn sm" data-act="semana" data-v="7">›</button><button class="btn sm sp" data-act="sorteio">Refazer sorteio</button></div>
+  <p class="muted">O responsável de cada dia fica gravado assim que é definido. Atualizar a página não sorteia de novo.</p>
+  ${semanaHtml(S.progDias, S.progAuds)}
+  <div class="tw" style="margin-top:12px"><table><thead><tr><th>Dia</th><th>Responsável</th><th>Situação</th></tr></thead><tbody>
+  ${S.progDias.map(d => {
+    const iniciado = (S.progAuds[d.data] || []).length > 0, passado = d.data < S.hoje;
+    return `<tr><td>${DIAS[dow(d.data)]} ${brData(d.data)}</td><td>${iniciado || passado ? esc(d.atrib?.colaborador_nome || "—") : `<select data-chg="resp" data-d="${d.data}" style="padding:6px;border-radius:6px;border:1px solid var(--line);background:var(--surface-2)">${d.atrib ? "" : '<option value="">—</option>'}${opts(d.atrib?.colaborador_id)}</select>`}</td><td>${iniciado ? "Iniciada" : passado ? "Passou" : "Pode alterar"}</td></tr>`;
+  }).join("")}</tbody></table></div></div>`;
+}
+
+function admCtrl() {
+  const a = S.aud;
+  if (!a) return `<div class="panel"><h2>Controle diário · ${brData(S.hoje)}</h2><p>Auditoria de hoje ainda não iniciada.</p><p class="muted">Responsável: ${esc(S.atrib?.colaborador_nome || "—")}</p></div>`;
+  return `<div class="panel"><h2>Controle diário · ${brData(S.hoje)}</h2>
+  <div class="kpis"><div class="kpi"><b>${esc(a.colaborador_nome)}</b><span>Auditor</span></div><div class="kpi"><b>${audTxt[a.status]}</b><span>Status</span></div><div class="kpi"><b>${horaDe(a.horario_inicio)}</b><span>Início</span></div><div class="kpi"><b>${horaDe(a.horario_finalizacao)}</b><span>Finalização</span></div></div>
+  <div class="tw"><table><thead><tr><th>Setor</th><th>Status</th><th>Abertura</th><th>Conclusão</th></tr></thead><tbody>
+  ${S.audSet.map(s => `<tr><td>${esc(s.setor_nome)}</td><td>${stTxt[s.status]}</td><td>${horaDe(s.horario_inicio)}</td><td>${horaDe(s.horario_conclusao)}</td></tr>`).join("")}</tbody></table></div>
+  ${S.audsHoje.length > 1 ? `<p class="muted">Hoje já houve ${S.audsHoje.length - 1} reinício(s).</p>` : ""}
+  <div class="row" style="margin-top:12px"><button class="btn sm" data-act="reiniciar">Reiniciar auditoria de hoje</button><button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir auditoria de hoje</button></div></div>`;
+}
+
+function admCrud(k) {
+  const [, alvo, titulo] = COLS[k], lista = S[alvo];
+  return `<div class="panel"><h2>${titulo}</h2>
+  <div class="row" style="margin-bottom:12px"><input id="novoNome" placeholder="Novo nome" style="flex:1;min-width:180px;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"><button class="btn sm primary" data-act="add" data-k="${k}">Adicionar</button></div>
+  ${k === "col" ? `<p class="muted" style="font-size:14px">Fixo = não entra no rodízio (ex.: quem cuida do CQ). O rodízio segue a ordem desta lista.</p>` : ""}
+  <div class="tw"><table><thead><tr><th>Ordem</th><th>Nome</th><th>Ativo</th>${k === "col" ? "<th>Fixo</th>" : ""}<th></th></tr></thead><tbody>
+  ${lista.map((x, i) => `<tr><td><button class="btn sm" data-act="mover" data-k="${k}" data-id="${x.id}" data-v="-1" ${i === 0 ? "disabled" : ""} aria-label="Subir">▲</button> <button class="btn sm" data-act="mover" data-k="${k}" data-id="${x.id}" data-v="1" ${i === lista.length - 1 ? "disabled" : ""} aria-label="Descer">▼</button></td>
+    <td><input value="${esc(x.nome)}" data-chg="nome" data-k="${k}" data-id="${x.id}" style="padding:6px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);min-width:180px"></td>
+    <td><input type="checkbox" data-chg="ativo" data-k="${k}" data-id="${x.id}" ${x.ativo ? "checked" : ""}></td>
+    ${k === "col" ? `<td><input type="checkbox" data-chg="fixo" data-k="${k}" data-id="${x.id}" ${x.fixo ? "checked" : ""}></td>` : ""}
+    <td><button class="btn sm danger" data-act="del" data-k="${k}" data-id="${x.id}">Excluir</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">Nada cadastrado.</td></tr>`}
+  </tbody></table></div></div>`;
+}
+
+function admCfg() {
+  const c = S.config;
+  return `<div class="panel"><h2>Configuração do relatório</h2>
+  <div class="field"><label for="cfNome">Nome da empresa</label><input id="cfNome" value="${esc(c.empresa_nome ?? "Lojas MM · CDAM")}"></div>
+  <div class="field"><label for="cfSub">Subtítulo do relatório</label><input id="cfSub" value="${esc(c.empresa_subtitulo ?? "Relatório de auditoria operacional diária")}"></div>
+  <div class="field"><label><input type="checkbox" id="cfFoto" ${c.foto_obrigatoria !== false ? "checked" : ""}> Foto obrigatória ao registrar ocorrência</label></div>
+  <p class="muted" style="font-size:14px">O envio do logo entra na fase 4, junto com o relatório Word.</p>
+  <button class="btn primary" data-act="cfg">Salvar configuração</button></div>`;
+}
+
+/* ================= MODAL ================= */
+function abrirModal(html) { $("#sheet").innerHTML = html; $("#modal").classList.add("open"); }
+function fechar() { $("#modal").classList.remove("open"); }
+function modalFinalizar() {
+  abrirModal(`<h2>Finalizar auditoria</h2><div class="auto">${S.audSet.length} setores concluídos · horário de finalização registrado automaticamente</div>
+  <div class="field"><label for="fObs">Observação geral do dia</label><textarea id="fObs" rows="3" placeholder="Resumo da ronda"></textarea></div>
+  <div class="row"><button class="btn" data-act="fechar">Voltar</button><button class="btn primary sp" data-act="confirmar-fim">Finalizar auditoria</button></div>`);
+}
+
+/* ================= EVENTOS ================= */
+document.addEventListener("click", e => {
+  const el = e.target.closest("[data-act]");
+  if (!el || el.disabled) return;
+  const a = el.dataset.act;
+  if (el.tagName === "A") e.preventDefault();
+  const d = el.dataset;
+  switch (a) {
+    case "modo": S.modo = d.v; if (S.modo === "ver" && S.view === "setor") S.view = "main"; break;
+    case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); break;
+    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); break;
+    case "go-main": S.view = "main"; break;
+    case "go-admin": S.view = "admin"; if (S.isAdmin && S.adminTab === "prog") return acao(carregarProg); break;
+    case "sair": return acao(sair);
+    case "login": return acao(() => entrarAdmin($("#lgUser").value, $("#lgPass").value));
+    case "iniciar": return acao(iniciar);
+    case "abrir-setor": return acao(() => abrirSetor(d.id));
+    case "voltar": S.view = "main"; break;
+    case "concluir-setor": return acao(concluirSetor);
+    case "finalizar": return modalFinalizar();
+    case "confirmar-fim": { const obs = $("#fObs").value; fechar(); return acao(() => finalizar(obs)); }
+    case "fechar": return fechar();
+    case "reiniciar": return acao(reiniciar);
+    case "excluir": return acao(() => excluirAuditoria(d.id));
+    case "mes": { const [y, m] = S.mes.split("-").map(Number); const dt = new Date(Date.UTC(y, m - 1 + Number(d.v), 1)); S.mes = `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}`; return acao(carregarMes); }
+    case "semana": S.progRef = addDias(S.progRef, Number(d.v)); return acao(carregarProg);
+    case "sorteio": return acao(refazerSorteio);
+    case "add": { const n = $("#novoNome").value; return acao(() => addCad(d.k, n)); }
+    case "mover": return acao(() => moverCad(d.k, d.id, Number(d.v)));
+    case "del": return acao(() => delCad(d.k, d.id));
+    case "padrao": return acao(criarPadrao);
+    case "cfg": { const dados = { empresa_nome: $("#cfNome").value.trim(), empresa_subtitulo: $("#cfSub").value.trim(), foto_obrigatoria: $("#cfFoto").checked }; return acao(() => salvarConfig(dados)); }
+    case "msg": return toast(d.m);
+    default: return;
+  }
+  render();
+});
+document.addEventListener("change", e => {
+  const el = e.target.closest("[data-chg]");
+  if (!el) return;
+  const d = el.dataset;
+  if (d.chg === "resp") return el.value && acao(() => trocarResponsavel(d.d, el.value));
+  if (d.chg === "nome") { const v = el.value.trim(); if (!v) return render(); return acao(() => updCad(d.k, d.id, { nome: v })); }
+  if (d.chg === "ativo" || d.chg === "fixo") return acao(() => updCad(d.k, d.id, { [d.chg]: el.checked }));
+});
+document.addEventListener("keydown", e => { if (e.key === "Enter" && (e.target.id === "lgPass" || e.target.id === "lgUser")) $("[data-act=login]")?.click(); if (e.key === "Enter" && e.target.id === "novoNome") $("[data-act=add]")?.click(); });
+$("#modal").addEventListener("click", e => { if (e.target.id === "modal") fechar(); });
+
+// virada do dia com a página aberta
+setInterval(() => { if (todayStr() !== S.hoje && S.pronto) acao(carregarDia); }, 60000);
+
+/* ================= AUTENTICAÇÃO ================= */
+onAuthStateChanged(auth, async user => {
+  if (!user) { try { await signInAnonymously(auth); } catch (e) { console.error(e); $("#app").innerHTML = `<div class="panel" style="margin-top:24px">Não foi possível conectar: ${esc(e.code || e.message)}</div>`; } return; }
+  S.user = user; S.isAdmin = false; S.adminNome = "";
+  if (!user.isAnonymous) {
+    try {
+      const u = await getDoc(doc(db, "usuarios", user.uid));
+      if (u.exists() && u.data().perfil === "admin") { S.isAdmin = true; S.adminNome = u.data().nome || user.email.replace(DOMINIO, ""); }
+      else { toast("Esta conta não tem acesso de admin."); await signOut(auth); return; }
+    } catch (e) { console.error(e); toast("Erro ao verificar acesso."); await signOut(auth); return; }
+  }
+  // reassina a cada troca de conta (anônimo ↔ admin), pois a troca derruba as escutas antigas
+  try { await assinarCadastros(); await carregarDia(); S.pronto = true; }
+  catch (e) { console.error(e); $("#app").innerHTML = `<div class="panel" style="margin-top:24px">Erro ao carregar: ${esc(e.code || e.message)}</div>`; return; }
+  if (S.isAdmin && S.view === "admin" && S.adminTab === "prog") { try { await carregarProg(); } catch (e) { console.error(e); } }
+  render();
+});
+render();
+
+</script>
+</body>
+</html>
