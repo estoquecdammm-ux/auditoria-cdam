@@ -194,12 +194,24 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .histhead{border:0;background:none;padding:4px 0;text-align:left;display:flex;flex-wrap:wrap;gap:6px 10px;align-items:center;flex:1;min-width:240px}
 .histbody{margin-top:10px;border-top:1px solid var(--line);padding-top:10px}
 .logoprev{max-height:56px;max-width:200px;background:#fff;border-radius:6px;padding:4px;border:1px solid var(--line)}
+.brand-logo{height:30px;width:auto;display:block}
+@media(max-width:480px){.brand-logo{height:24px}.brand b{font-size:17px}}
+.vbars{display:flex;align-items:flex-end;gap:3px;height:140px;padding-top:8px;border-bottom:1px solid var(--line);overflow-x:auto}
+.vbars div{flex:1 0 14px;min-width:14px;background:var(--navy);border-radius:3px 3px 0 0;position:relative}
+.vbars div.fds{background:var(--line)}
+:root[data-theme="dark"] .vbars div:not(.fds){background:var(--yellow)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .vbars div:not(.fds){background:var(--yellow)}}
+.vlabels{display:flex;gap:3px;font-size:10px;color:var(--muted);overflow-x:auto}
+.vlabels span{flex:1 0 14px;min-width:14px;text-align:center}
+.kpi.alerta b{color:var(--bad)}
+.kpi small{display:block;font-size:12px;color:var(--muted);margin-top:2px}
+.hbar b{text-align:right}
 </style>
 </head>
 <body>
 <header class="top">
   <div class="top-in">
-    <div class="brand"><div class="brand-mark">MM</div><div><b>Auditoria Operacional</b><small>CDAM · filial 083</small></div></div>
+    <div class="brand"><img class="brand-logo" id="logoPadrao" alt="Lojas MM" src="data:image/png;base64,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"><div><b>Auditoria Operacional</b><small>CDAM · filial 083</small></div></div>
     <nav class="nav"><a href="#" data-act="go-main" id="navMain" class="on">Auditoria por setores</a><a href="#" data-act="go-admin" id="navAdmin">Painel administrativo</a><a href="#" data-act="sair" id="navSair" style="display:none">Sair</a></nav>
     <div class="mode" id="modeBox"><button data-act="modo" data-v="ver" class="on">Visualizar</button><button data-act="modo" data-v="exec" class="exec">Executar</button></div>
   </div>
@@ -260,6 +272,7 @@ const S = {
   mes: todayStr().slice(0, 7), mesAuds: [], mesAtrib: {},
   progRef: todayStr(), progDias: [], progAuds: {},
   ocsHoje: [], emAnalise: [], pendAbertas: [], verifHoje: [], todasOcs: null,
+  ind: { per: "30", ini: "", fim: "", dados: null },
   hist: { mes: todayStr().slice(0, 7), auditor: "", status: "", auds: null, aberto: {} }, logo: undefined,
   pf: { status: "abertas", grav: "", setor: "", auditor: "", resp: "", q: "", ord: "dias" },
   busy: false,
@@ -862,7 +875,7 @@ function montarRelatorio(D, dados) {
   /* ---------- corpo ---------- */
   const corpo = [];
   corpo.push(p([t("Relatório de auditoria operacional", { bold: true, size: 36, color: NAVY })], { before: 120, after: 40 }));
-  corpo.push(p([t(`${aud.dia_semana || ""}, ${br(aud.data)}`, { size: 22, color: CINZA })], { after: 200 }));
+  corpo.push(p([t([aud.dia_semana, br(aud.data)].filter(Boolean).join(", "), { size: 22, color: CINZA })], { after: 200 }));
 
   const lin = (a, b, c, d) => new TableRow({ children: [cel(p([t(a, { size: 18, color: CINZA })], { after: 0 }), 1900, { fill: FUNDO }), cel(p([t(b, { bold: true })], { after: 0 }), 3203), cel(p([t(c, { size: 18, color: CINZA })], { after: 0 }), 1900, { fill: FUNDO }), cel(p([t(d, { bold: true })], { after: 0 }), 3203)] });
   corpo.push(tabela([1900, 3203, 1900, 3203], [
@@ -944,6 +957,7 @@ function montarRelatorio(D, dados) {
   });
 }
 
+const LOGO_PADRAO = () => document.getElementById("logoPadrao")?.src || null;
 let docxProm = null;
 function carregarDocx() {
   if (window.docx) return Promise.resolve(window.docx);
@@ -1002,7 +1016,7 @@ async function gerarRelatorioDocx(audId) {
   const geradoEm = nowISO();
   const documento = montarRelatorio(D, {
     cfg: { empresa_nome: S.config.empresa_nome ?? "Lojas MM · CDAM", empresa_subtitulo: S.config.empresa_subtitulo ?? "Relatório de auditoria operacional diária" },
-    aud, setores, ocorrencias, verificacoes, fotos, logo: await imgDeDataURL(logoUrl), geradoEm,
+    aud, setores, ocorrencias, verificacoes, fotos, logo: await imgDeDataURL(logoUrl || LOGO_PADRAO()), geradoEm,
   });
   const blob = await D.Packer.toBlob(documento);
   baixarArquivo(blob, `Auditoria_${aud.data}_${nomeArquivo(aud.colaborador_nome)}.docx`);
@@ -1075,11 +1089,111 @@ async function salvarLogo(file) {
   toast("Logo salvo");
 }
 async function removerLogo() {
-  if (!confirm("Remover o logo do relatório?")) return;
+  if (!confirm("Voltar a usar o logo padrão Lojas MM no relatório?")) return;
   await setDoc(doc(db, "config", "logo"), { data: null, alterado_por: S.adminNome, alterado_em: nowISO() });
   S.logo = null;
-  toast("Logo removido");
+  toast("Usando o logo padrão");
 }
+
+/* ================= INDICADORES ================= */
+function periodoInd() {
+  const i = S.ind;
+  if (i.per === "mes") return [S.hoje.slice(0, 8) + "01", S.hoje];
+  if (i.per === "custom") return [i.ini || addDias(S.hoje, -29), i.fim || S.hoje];
+  return [addDias(S.hoje, -(Number(i.per) - 1)), S.hoje];
+}
+async function carregarInd() {
+  let [ini, fim] = periodoInd();
+  if (ini > fim) [ini, fim] = [fim, ini];
+  const entre = (col, campo) => getDocs(query(collection(db, col), where(campo, ">=", ini), where(campo, "<=", fim)));
+  const [auds, ocS, vS, abS, resS] = await Promise.all([
+    audsEntre(ini, fim), entre("ocorrencias", "auditoria_data"), entre("verificacoes", "dia"),
+    getDocs(query(collection(db, "ocorrencias"), where("status", "in", ["em_analise", "pendente", "parcialmente_resolvida"]))),
+    getDocs(query(collection(db, "ocorrencias"), where("status", "==", "resolvida"))),
+  ]);
+  const dd = s => s.docs.map(d => d.data());
+  S.ind.dados = { ini, fim, auds, ocs: dd(ocS), verifs: dd(vS), abertas: dd(abS),
+    resolvidasPer: dd(resS).filter(o => { const x = String(o.data_resolucao || "").slice(0, 10); return x >= ini && x <= fim; }) };
+}
+const media = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+const fmt1 = v => v == null ? "—" : v.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+const pct = (a, b) => b ? Math.round(a / b * 100) + "%" : "—";
+const diasResol = o => (new Date(o.data_resolucao) - new Date(o.registrado_em)) / 86400000;
+const minutos = a => (new Date(a.horario_finalizacao) - new Date(a.horario_inicio)) / 60000;
+const hm = m => m == null ? "—" : `${Math.floor(m / 60)}h${pad(Math.round(m % 60))}`;
+function barras(pares, cor) {
+  if (!pares.length) return `<p class="muted">Sem dados no período.</p>`;
+  const mx = Math.max(...pares.map(p => p[1]), 1);
+  return pares.map(([l, v, c]) => `<div class="hbar"><span title="${esc(l)}">${esc(l)}</span><div style="width:${Math.max(2, v / mx * 100)}%${c || cor ? ";background:" + (c || cor) : ""}"></div><b>${v}</b></div>`).join("");
+}
+function contar(arr, fn) { const m = {}; arr.forEach(x => { const k = fn(x); if (k) m[k] = (m[k] || 0) + 1; }); return Object.entries(m).sort((a, b) => b[1] - a[1]); }
+function tabInd() {
+  const i = S.ind, D = i.dados;
+  const per = [["7", "7 dias"], ["30", "30 dias"], ["90", "90 dias"], ["mes", "Este mês"], ["custom", "Personalizado"]];
+  const ctrl = `<div class="row" style="margin-bottom:12px"><div class="chips">${per.map(([v, l]) => `<button data-act="ind-per" data-v="${v}" class="${i.per === v ? "on" : ""}">${l}</button>`).join("")}</div>
+    ${i.per === "custom" ? `<div class="row"><input type="date" data-ind="ini" value="${i.ini}" aria-label="Início" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"><span>até</span><input type="date" data-ind="fim" value="${i.fim}" aria-label="Fim" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"></div>` : ""}</div>`;
+  if (!D) return ctrl + `<div class="panel">Carregando indicadores…</div>`;
+  const { auds, ocs, verifs, abertas, resolvidasPer, ini, fim } = D;
+  const fin = auds.filter(a => a.status === "finalizada");
+  const diasFin = new Set(fin.map(a => a.data));
+  let uteis = 0, naoFeitas = 0;
+  for (let d = ini; d <= fim && d <= S.hoje; d = addDias(d, 1)) if (diasUteis(d)) { uteis++; if (!diasFin.has(d) && d < S.hoje) naoFeitas++; }
+  const validas = ocs.filter(o => o.status !== "cancelada");
+  const resolvidas = validas.filter(o => o.status === "resolvida");
+  const naHora = validas.filter(o => o.acao_realizada === "resolvido_hora");
+  const tempoRes = media(resolvidasPer.filter(o => o.acao_realizada !== "resolvido_hora" && o.registrado_em).map(diasResol));
+  const criticasAb = abertas.filter(o => o.gravidade === "critica");
+  const velhas = abertas.filter(o => diasAberto(o) > 7);
+  const kpi = (v, l, sub, alerta) => `<div class="kpi ${alerta ? "alerta" : ""}"><b>${v}</b><span>${l}</span>${sub ? `<small>${sub}</small>` : ""}</div>`;
+  const kpis = `<div class="kpis">
+    ${kpi(fin.length, "Auditorias realizadas", `${uteis} dia(s) útil(eis) · ${pct(fin.length, uteis)}`)}
+    ${kpi(naoFeitas, "Dias sem auditoria", auds.some(a => a.status === "reiniciada") ? `${auds.filter(a => a.status === "reiniciada").length} reinício(s)` : "", naoFeitas > 0)}
+    ${kpi(hm(media(fin.filter(a => a.horario_finalizacao).map(minutos))), "Duração média da ronda")}
+    ${kpi(validas.length, "Ocorrências encontradas", ocs.length - validas.length ? `${ocs.length - validas.length} cancelada(s)` : "")}
+    ${kpi(resolvidas.length, "Resolvidas", `${pct(resolvidas.length, validas.length)} · ${naHora.length} na hora`)}
+    ${kpi(fmt1(tempoRes) + (tempoRes == null ? "" : " d"), "Tempo médio de resolução", "sem contar as resolvidas na hora")}
+    ${kpi(validas.filter(o => o.reincidencia).length, "Reincidências", "mesmo tipo e setor em 10 dias", validas.some(o => o.reincidencia))}
+    ${kpi(abertas.length, "Abertas agora", `${abertas.filter(o => o.status === "em_analise").length} em análise`)}
+    ${kpi(criticasAb.length, "Críticas abertas", velhas.length ? `${velhas.length} aberta(s) há mais de 7 dias` : "", criticasAb.length > 0)}
+  </div>`;
+  // ocorrências por dia
+  const porDia = {}; validas.forEach(o => porDia[o.auditoria_data] = (porDia[o.auditoria_data] || 0) + 1);
+  const dias = []; for (let d = ini; d <= fim && d <= S.hoje; d = addDias(d, 1)) dias.push(d);
+  const mxd = Math.max(1, ...Object.values(porDia));
+  const graficoDia = dias.length > 120 ? "" : `<div class="panel"><h2>Ocorrências por dia</h2><div class="vbars" role="img" aria-label="Ocorrências por dia">${dias.map(d => `<div class="${diasUteis(d) ? "" : "fds"}" style="height:${(porDia[d] || 0) / mxd * 100}%" title="${brData(d)}: ${porDia[d] || 0}"></div>`).join("")}</div>
+    <div class="vlabels">${dias.map((d, k) => `<span>${k % Math.ceil(dias.length / 10) === 0 ? d.slice(8) + "/" + d.slice(5, 7) : ""}</span>`).join("")}</div></div>`;
+  // setores
+  const setNomes = [...new Set([...S.setores.filter(s => s.ativo).map(s => s.nome), ...validas.map(o => o.setor_nome)])];
+  const setStats = setNomes.map(n => {
+    const l = validas.filter(o => o.setor_nome === n), r = l.filter(o => o.status === "resolvida");
+    return { n, qt: l.length, res: r.length, tempo: media(r.filter(o => o.acao_realizada !== "resolvido_hora" && o.data_resolucao).map(diasResol)), crit: l.filter(o => o.gravidade === "critica" || o.gravidade === "alta").length };
+  });
+  const melhores = [...setStats].sort((a, b) => a.qt - b.qt || a.crit - b.crit || (a.tempo ?? 0) - (b.tempo ?? 0));
+  const gravCor = { critica: "var(--crit)", alta: "var(--bad)", media: "var(--warn)", baixa: "var(--info)" };
+  // auditores
+  const nomesAud = [...new Set([...fin.map(a => a.colaborador_nome), ...validas.map(o => o.auditor_nome), ...verifs.map(v => v.auditor_nome)])].filter(Boolean).sort();
+  const audRows = nomesAud.map(n => {
+    const f = fin.filter(a => a.colaborador_nome === n);
+    return { n, f: f.length, oc: validas.filter(o => o.auditor_nome === n).length, v: verifs.filter(v => v.auditor_nome === n).length, dur: media(f.filter(a => a.horario_finalizacao).map(minutos)) };
+  }).sort((a, b) => b.f - a.f || b.oc - a.oc);
+  const vres = contar(verifs, v => verifTxt[v.resultado]);
+  return ctrl + `<p class="muted" style="margin:-4px 0 12px">Período: ${brData(ini)} a ${brData(fim)}</p>` + kpis + graficoDia + `
+  <div class="grid g3">
+    <div class="panel"><h2>Setores com mais ocorrências</h2>${barras(setStats.filter(s => s.qt).sort((a, b) => b.qt - a.qt).map(s => [s.n, s.qt]))}</div>
+    <div class="panel"><h2>Por tipo</h2>${barras(contar(validas, o => o.tipo_ocorrencia))}</div>
+    <div class="panel"><h2>Por gravidade</h2>${barras(["critica", "alta", "media", "baixa"].map(g => [gravTxt[g], validas.filter(o => o.gravidade === g).length, gravCor[g]]).filter(x => x[1]))}</div>
+  </div>
+  <div class="panel"><h2>Desempenho dos setores</h2><p class="muted" style="margin-top:-4px">Do melhor para o pior: menos ocorrências, depois menos críticas ou altas, depois resolução mais rápida.</p>
+    <div class="tw"><table><thead><tr><th>#</th><th>Setor</th><th>Ocorrências</th><th>Críticas/altas</th><th>Resolvidas</th><th>Tempo médio</th></tr></thead><tbody>
+    ${melhores.map((s, k) => `<tr><td>${k + 1}</td><td>${esc(s.n)}</td><td>${s.qt}</td><td>${s.crit}</td><td>${s.qt ? pct(s.res, s.qt) : "—"}</td><td>${s.tempo == null ? "—" : fmt1(s.tempo) + " d"}</td></tr>`).join("")}</tbody></table></div></div>
+  <div class="grid g2">
+    <div class="panel"><h2>Desempenho por auditor</h2>${audRows.length ? `<div class="tw"><table><thead><tr><th>Auditor</th><th>Rondas</th><th>Ocorrências</th><th>Conferências</th><th>Duração média</th></tr></thead><tbody>
+      ${audRows.map(r => `<tr><td>${esc(r.n)}</td><td>${r.f}</td><td>${r.oc}</td><td>${r.v}</td><td>${hm(r.dur)}</td></tr>`).join("")}</tbody></table></div>` : `<p class="muted">Sem dados no período.</p>`}</div>
+    <div class="panel"><h2>Resultado das conferências</h2>${barras(vres.map(([l, v]) => [l, v, l === "Resolvido" ? "var(--ok)" : l === "Continua pendente" ? "var(--bad)" : "var(--warn)"]))}
+      ${verifs.length ? `<p class="muted" style="font-size:14px">${verifs.length} conferência(s) no período · ${pct(verifs.filter(v => v.resultado === "resolvido").length, verifs.length)} resolvidas na conferência</p>` : ""}</div>
+  </div>`;
+}
+const diasUteis = diaUtil;
 
 /* ================= ADMIN: LOGIN ================= */
 async function entrarAdmin(usuario, senha) {
@@ -1186,7 +1300,7 @@ function render() {
   if (S.view === "admin") return $("#app").innerHTML = S.isAdmin ? telaAdmin() : telaLogin();
   const tabs = [["hoje", "Auditoria de hoje"], ["pend", "Pendências"], ["dias", "Dias"], ["ind", "Indicadores"], ["def", "Definições"]];
   $("#app").innerHTML = `<div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button data-act="tab" data-v="${k}" class="${S.tab === k ? "on" : ""}">${l}</button>`).join("")}</div>`
-    + ({ hoje: tabHoje, pend: tabPend, dias: tabDias, ind: () => emBreve("Indicadores", "Chega na fase 5, quando já houver ocorrências registradas."), def: tabDef })[S.tab]();
+    + ({ hoje: tabHoje, pend: tabPend, dias: tabDias, ind: tabInd, def: tabDef })[S.tab]();
 }
 const emBreve = (t, m) => `<div class="panel"><h2>${t}</h2><p class="muted">${m}</p></div>`;
 
@@ -1337,7 +1451,7 @@ function telaAdmin() {
   const seed = vazio ? `<div class="note" style="margin-top:16px">Ainda não há ${!S.setores.length ? "setores" : ""}${!S.setores.length && !S.tipos.length ? " nem " : ""}${!S.tipos.length ? "tipos de ocorrência" : ""} cadastrados. <button class="btn sm primary" data-act="padrao">Criar lista padrão</button></div>` : "";
   const body = {
     prog: admProg, ctrl: admCtrl, set: () => admCrud("set"), tip: () => admCrud("tip"), col: () => admCrud("col"), cfg: admCfg,
-    ind: () => emBreve("Indicadores", "Chega na fase 5."),
+    ind: tabInd,
     hist: admHist,
   };
   return seed + `<div class="tabs">${tabs.map(([k, l]) => `<button data-act="atab" data-v="${k}" class="${S.adminTab === k ? "on" : ""}">${l}</button>`).join("")}</div>${body[S.adminTab]()}`;
@@ -1417,7 +1531,7 @@ function admCfg() {
   <div class="field"><label for="cfNome">Nome da empresa</label><input id="cfNome" value="${esc(c.empresa_nome ?? "Lojas MM · CDAM")}"></div>
   <div class="field"><label for="cfSub">Subtítulo do relatório</label><input id="cfSub" value="${esc(c.empresa_subtitulo ?? "Relatório de auditoria operacional diária")}"></div>
   <div class="field"><label><input type="checkbox" id="cfFoto" ${c.foto_obrigatoria !== false ? "checked" : ""}> Foto obrigatória ao registrar ocorrência</label></div>
-  <div class="field"><label>Logo do relatório</label><div class="row">${S.logo === undefined ? `<span class="muted">Carregando…</span>` : S.logo ? `<img src="${S.logo}" alt="Logo atual" class="logoprev"><button class="btn sm" data-act="logo">Trocar logo</button><button class="btn sm danger" data-act="logo-del">Remover</button>` : `<span class="muted">Nenhum logo</span><button class="btn sm" data-act="logo">Enviar logo</button>`}</div>
+  <div class="field"><label>Logo do relatório</label><div class="row">${S.logo === undefined ? `<span class="muted">Carregando…</span>` : S.logo ? `<img src="${S.logo}" alt="Logo atual" class="logoprev"><button class="btn sm" data-act="logo">Trocar logo</button><button class="btn sm danger" data-act="logo-del">Voltar ao padrão</button>` : `<img src="${LOGO_PADRAO()}" alt="Logo padrão" class="logoprev"><span class="muted" style="font-size:13px">Logo padrão Lojas MM</span><button class="btn sm" data-act="logo">Enviar outro</button>`}</div>
   <p class="muted" style="font-size:13px;margin:4px 0 0">PNG com fundo transparente fica melhor. A imagem é reduzida automaticamente.</p></div>
   <button class="btn primary" data-act="cfg">Salvar configuração</button></div>`;
 }
@@ -1440,8 +1554,8 @@ document.addEventListener("click", e => {
   const d = el.dataset;
   switch (a) {
     case "modo": S.modo = d.v; break;
-    case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); if (d.v === "pend") return acao(carregarTodas); break;
-    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "cfg" && S.logo === undefined) return acao(carregarLogo); break;
+    case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); if (d.v === "pend") return acao(carregarTodas); if (d.v === "ind") return acao(carregarInd); break;
+    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "ind") return acao(carregarInd); if (d.v === "cfg" && S.logo === undefined) return acao(carregarLogo); break;
     case "go-main": S.view = "main"; break;
     case "go-admin": S.view = "admin"; if (S.isAdmin && S.adminTab === "prog") return acao(carregarProg); break;
     case "sair": return acao(sair);
@@ -1484,6 +1598,7 @@ document.addEventListener("click", e => {
     case "hist-abrir": return acao(() => abrirHist(d.id));
     case "logo": $("#logoInput").value = ""; return $("#logoInput").click();
     case "logo-del": return acao(removerLogo);
+    case "ind-per": S.ind.per = d.v; if (d.v === "custom" && !S.ind.ini) { S.ind.ini = addDias(S.hoje, -29); S.ind.fim = S.hoje; } return acao(carregarInd);
     default: return;
   }
   render();
@@ -1491,6 +1606,8 @@ document.addEventListener("click", e => {
 document.addEventListener("change", e => {
   const pf = e.target.closest("select[data-pf]");
   if (pf) return aplicarFiltro(pf);
+  const ic = e.target.closest("[data-ind]");
+  if (ic) { if (!ic.value) return; S.ind[ic.dataset.ind] = ic.value; return acao(carregarInd); }
   const hs = e.target.closest("[data-hist]");
   if (hs) { S.hist[hs.dataset.hist] = hs.value; if (hs.dataset.hist === "mes") { if (!hs.value) return; S.hist.auditor = ""; return acao(carregarHist); } return render(); }
   const el = e.target.closest("[data-chg]");
