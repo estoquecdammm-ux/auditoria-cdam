@@ -115,6 +115,7 @@ body.exec .exec-only.btn.block{display:block!important}
 
 /* semana */
 .week{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}
+.week.w6{grid-template-columns:repeat(6,1fr)}
 .day{border:1px solid var(--line);border-radius:10px;padding:10px;background:var(--surface-2);min-height:96px;font-size:13px}
 .day.today{border:2px solid var(--yellow);background:var(--surface)}
 .day b{display:block;font:700 16px "Barlow Condensed",sans-serif}
@@ -218,6 +219,9 @@ body.busy .btn{pointer-events:none;opacity:.7}
 .panel.perigo h2{color:var(--bad)}
 .ciclo{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin:0 0 12px;background:var(--surface-2)}
 .ciclo-lista{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+@media(max-width:560px){.week.w6{grid-template-columns:1fr}}
+.cfgsec{border-top:1px solid var(--line);margin-top:16px;padding-top:12px}
+.cfgsec h3{font:700 19px "Barlow Condensed",sans-serif;margin:0 0 6px}
 </style>
 </head>
 <body>
@@ -265,7 +269,10 @@ const fmtD = d => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.get
 const addDias = (s, n) => { const d = parseD(s); d.setUTCDate(d.getUTCDate() + n); return fmtD(d); };
 const dow = s => parseD(s).getUTCDay();
 const segundaDe = s => addDias(s, -((dow(s) + 6) % 7));
-const diaUtil = s => dow(s) >= 1 && dow(s) <= 5;
+const comSabado = () => S.config?.sabado !== false; // ronda aos sábados (ligado por padrão)
+const diasRonda = () => comSabado() ? 6 : 5;
+const diaUtil = s => (dow(s) >= 1 && dow(s) <= 5) || (dow(s) === 6 && comSabado());
+const fimSemana = seg => addDias(seg, diasRonda() - 1);
 const DIAS = ["Domingo", "Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado"];
 const brData = s => s ? s.split("-").reverse().join("/") : "";
 function duracao(a, b) {
@@ -282,7 +289,7 @@ import("https://estoquecdammm-ux.github.io/produtos-cdam/produtos.mjs")
 
 /* ================= ESTADO ================= */
 const S = {
-  pronto: false, user: null, isAdmin: false, adminNome: "", oculto: false, trocaSenha: false, usuarios: null, contagens: null, formUsr: { nome: "", usuario: "", senha: "" },
+  pronto: false, user: null, emailPriv: undefined, isAdmin: false, adminNome: "", oculto: false, trocaSenha: false, usuarios: null, contagens: null, formUsr: { nome: "", usuario: "", senha: "" },
   modo: "ver", view: "main", tab: "hoje", adminTab: "prog", setorAtual: null,
   setores: [], tipos: [], colabs: [], config: {},
   hoje: todayStr(), atrib: null, semana: [], semanaAuds: {},
@@ -380,7 +387,7 @@ async function getAtribuicaoDoDia(data, ctx = {}) {
 }
 async function getProgramacaoSemana(ref) {
   const seg = segundaDe(ref), dias = [], ctx = {};
-  for (let i = 0; i < 5; i++) {
+  for (let i = 0; i < diasRonda(); i++) {
     const d = addDias(seg, i);
     dias.push({ data: d, atrib: await getAtribuicaoDoDia(d, ctx) });
   }
@@ -473,7 +480,7 @@ async function carregarDia() {
   // semana sempre montada de segunda a sexta, em ordem, para o rodízio não pular ninguém
   S.semana = await getProgramacaoSemana(S.hoje);
   S.atrib = S.semana.find(d => d.data === S.hoje)?.atrib || null;
-  const seg = segundaDe(S.hoje), auds = await audsEntre(seg, addDias(seg, 4));
+  const seg = segundaDe(S.hoje), auds = await audsEntre(seg, fimSemana(seg));
   S.semanaAuds = {};
   auds.forEach(a => (S.semanaAuds[a.data] ||= []).push(a));
   assinarHoje();
@@ -564,9 +571,19 @@ async function finalizar(obs) {
   });
   toast("Auditoria finalizada");
   const id = S.aud.id;
-  try { await gerarRelatorioDocx(id); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o Word agora") + ". Use o botão Baixar relatório."); }
-  if (dow(S.hoje) === 5) {
-    try { await gerarRelatorioSemanal(segundaDe(S.hoje)); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o relatório da semana") + ". Use o botão em Indicadores."); }
+  let rel = null;
+  try { rel = await gerarRelatorioDocx(id); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o Word agora") + ". Use o botão Baixar relatório."); }
+  if (rel && emailAtivo()) {
+    try { const j = await enviarEmailDiario(rel); toast(`Relatório enviado por e-mail para ${j.enviados} destinatário(s)`); }
+    catch (e) { console.error(e); toast((e.userMsg || "E-mail não enviado") + " Use o botão Enviar por e-mail."); try { await updateDoc(doc(db, "auditorias", id), { email_erro: e.userMsg || String(e.message || e) }); } catch (x) { /* sem permissão */ } }
+  }
+  if (dow(S.hoje) === (comSabado() ? 6 : 5)) {
+    let relS = null;
+    try { relS = await gerarRelatorioSemanal(segundaDe(S.hoje)); } catch (e) { console.error(e); toast((e.userMsg || "Não foi possível gerar o relatório da semana") + ". Use o botão em Indicadores."); }
+    if (relS && emailAtivo()) {
+      try { const j = await enviarEmailSemanal(relS); toast(`Relatório da semana enviado para ${j.enviados} destinatário(s)`); }
+      catch (e) { console.error(e); toast((e.userMsg || "E-mail da semana não enviado") + " Use o botão em Indicadores."); }
+    }
   }
 }
 async function reiniciar() {
@@ -1099,7 +1116,7 @@ function baixarArquivo(blob, nome) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 const nomeArquivo = s => String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^A-Za-z0-9]+/g, "_").replace(/^_|_$/g, "");
-async function gerarRelatorioDocx(audId) {
+async function gerarRelatorioDocx(audId, { baixar = true } = {}) {
   toast("Gerando relatório Word…");
   const [D, aSnap] = await Promise.all([carregarDocx(), getDoc(doc(db, "auditorias", audId))]);
   if (!aSnap.exists()) throw falha("Auditoria não encontrada.");
@@ -1123,10 +1140,11 @@ async function gerarRelatorioDocx(audId) {
     cfg: { empresa_nome: S.config.empresa_nome ?? "Lojas MM · CDAM", empresa_subtitulo: S.config.empresa_subtitulo ?? "Relatório de auditoria operacional diária" },
     aud, setores, ocorrencias, verificacoes, fotos, logo: await imgDeDataURL(logoUrl || LOGO_PADRAO()), geradoEm,
   });
-  const blob = await D.Packer.toBlob(documento);
-  baixarArquivo(blob, `Auditoria_${aud.data}_${nomeArquivo(aud.colaborador_nome)}.docx`);
+  const blob = await D.Packer.toBlob(documento), nome = `Auditoria_${aud.data}_${nomeArquivo(aud.colaborador_nome)}.docx`;
+  if (baixar) baixarArquivo(blob, nome);
   try { await updateDoc(doc(db, "auditorias", audId), { relatorio_gerado_em: geradoEm }); } catch (e) { console.warn(e); }
-  toast("Relatório Word baixado");
+  if (baixar) toast("Relatório Word baixado");
+  return { blob, nome, audId, aud, setores, ocorrencias, verificacoes };
 }
 
 /* Relatório semanal — dados = { cfg, logo, seg, sex, hoje, dias:[{data, atrib, auds:[]}], ocs, verifs, abertas, fotos, geradoEm } */
@@ -1310,8 +1328,8 @@ function montarRelatorioSemanal(D, dados) {
     sections: [{ properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1300, bottom: 1000, left: 850, right: 850, header: 450, footer: 450 } } }, headers: { default: header }, footers: { default: footer }, children: c }] });
 }
 
-async function gerarRelatorioSemanal(seg) {
-  const sex = addDias(seg, 4);
+async function gerarRelatorioSemanal(seg, { baixar = true } = {}) {
+  const sex = fimSemana(seg);
   toast("Montando relatório da semana…");
   const [D, auds, atS, ocS, vS, abS] = await Promise.all([
     carregarDocx(), audsEntre(seg, sex),
@@ -1321,7 +1339,7 @@ async function gerarRelatorioSemanal(seg) {
     getDocs(query(collection(db, "ocorrencias"), where("auditoria_data", "<=", sex))),
   ]);
   const atrib = {}; atS.docs.forEach(d => atrib[d.id] = d.data());
-  const dias = [0, 1, 2, 3, 4].map(i => { const data = addDias(seg, i); return { data, atrib: atrib[data] || null, auds: auds.filter(a => a.data === data).sort((a, b) => String(a.horario_inicio).localeCompare(String(b.horario_inicio))) }; });
+  const dias = Array.from({ length: diasRonda() }, (_, i) => i).map(i => { const data = addDias(seg, i); return { data, atrib: atrib[data] || null, auds: auds.filter(a => a.data === data).sort((a, b) => String(a.horario_inicio).localeCompare(String(b.horario_inicio))) }; });
   const ocs = ocS.docs.map(d => d.data());
   const verifs = vS.docs.map(d => d.data());
   // abertas no fim da semana: criadas até sexta e não encerradas até lá
@@ -1333,7 +1351,7 @@ async function gerarRelatorioSemanal(seg) {
   });
   const ids = new Set();
   ocs.forEach(o => { if (!o.fotos_apagadas) FOTO_CAMPOS.forEach(k => o[k] && ids.add(o[k])); });
-  if (ids.size > 150 && !confirm(`A semana tem ${ids.size} fotos. O arquivo vai ficar pesado e pode demorar. Continuar?`)) return;
+  if (ids.size > 150 && !confirm(`A semana tem ${ids.size} fotos. O arquivo vai ficar pesado e pode demorar. Continuar?`)) throw falha("Relatório da semana cancelado.");
   const fotos = {};
   await Promise.all([...ids].map(async id => { const f = await imgDeDataURL(await carregarFoto(id)); if (f) fotos[id] = f; }));
   const logoUrl = S.logo === undefined ? await carregarLogo() : S.logo;
@@ -1341,8 +1359,118 @@ async function gerarRelatorioSemanal(seg) {
     cfg: { empresa_nome: S.config.empresa_nome ?? "Lojas MM · CDAM" }, logo: await imgDeDataURL(logoUrl || LOGO_PADRAO()),
     seg, sex, hoje: S.hoje, dias, ocs, verifs, abertas, fotos, geradoEm: nowISO(),
   });
-  baixarArquivo(await D.Packer.toBlob(documento), `Semana_${seg}_a_${sex}.docx`);
-  toast("Relatório da semana baixado");
+  const blob = await D.Packer.toBlob(documento), nome = `Semana_${seg}_a_${sex}.docx`;
+  if (baixar) { baixarArquivo(blob, nome); toast("Relatório da semana baixado"); }
+  return { blob, nome, seg, sex, dias, ocs, verifs, abertas };
+}
+
+/* ================= E-MAIL (Google Apps Script na conta do Estoque) =================
+   O app só dispara o relatório; a lista de destinatários fica guardada no script (só o líder, com a chave de líder, altera). */
+const EMAIL_CHAVE_ENVIO = "z9qFUretYYKIhzscVqV2wY6Z";
+const EMAIL_LIMITE_ANEXO = 18 * 1024 * 1024;
+const emailAtivo = () => !!S.config.email_url;
+async function paraBase64(blob) {
+  const b = new Uint8Array(await blob.arrayBuffer()); let s = "";
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+async function chamarScript(corpo, url = S.config.email_url) {
+  if (!url) throw falha("E-mail ainda não configurado (Painel → Configuração).");
+  let j;
+  try { const r = await fetch(url, { method: "POST", body: JSON.stringify(corpo) }); j = await r.json(); }
+  catch (e) { throw falha("Não consegui falar com o serviço de e-mail. Confira a internet e o endereço do script."); }
+  if (!j.ok) throw falha("E-mail: " + (j.erro || "erro desconhecido"));
+  return j;
+}
+const escH = v => esc(v).replace(/\n/g, "<br>");
+function tabelaH(cab, linhas) {
+  return `<table style="border-collapse:collapse;width:100%;font-size:13px;margin:6px 0 14px">${cab ? `<tr>${cab.map(c => `<th style="background:#1F2A44;color:#fff;text-align:left;padding:6px 8px">${c}</th>`).join("")}</tr>` : ""}${linhas.map((l, i) => `<tr>${l.map(c => `<td style="border-bottom:1px solid #D8DEE7;padding:6px 8px;${i % 2 ? "background:#F3F5F8" : ""}">${c}</td>`).join("")}</tr>`).join("")}</table>`;
+}
+function cartaoH(itens) {
+  return `<table style="border-collapse:separate;border-spacing:6px;width:100%;margin:4px 0 10px"><tr>${itens.map(([v, l, alerta]) => `<td style="background:#F3F5F8;border-radius:8px;padding:10px;vertical-align:top"><div style="font-size:24px;font-weight:700;color:${alerta ? "#C0392B" : "#1F2A44"}">${v}</div><div style="font-size:12px;color:#5E6A7D">${l}</div></td>`).join("")}</tr></table>`;
+}
+const moldeH = (titulo, sub, corpo, nota) => `<div style="font-family:Arial,Helvetica,sans-serif;color:#1B2433;max-width:680px">
+  <div style="background:#1F2A44;color:#fff;padding:14px 16px;border-bottom:5px solid #F2B705"><div style="font-size:20px;font-weight:700">${titulo}</div><div style="font-size:13px;opacity:.85">${sub}</div></div>
+  <div style="padding:14px 4px">${corpo}${nota ? `<p style="font-size:12px;color:#5E6A7D">${nota}</p>` : ""}
+  <p style="font-size:12px;color:#5E6A7D">Relatório completo em Word em anexo. Enviado automaticamente pelo sistema de Auditoria Operacional · ${esc(S.config.empresa_nome ?? "Lojas MM · CDAM")}.</p></div></div>`;
+async function anexoDe(rel) {
+  if (rel.blob.size > EMAIL_LIMITE_ANEXO) return { anexo: null, nota: "O Word ficou grande demais para anexar (muitas fotos). Baixe pelo app, na aba Dias ou em Indicadores." };
+  return { anexo: { nome: rel.nome, tipo: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", base64: await paraBase64(rel.blob) }, nota: "" };
+}
+async function enviarEmailDiario(rel) {
+  const { aud, setores, ocorrencias, verificacoes } = rel;
+  const novas = ocorrencias.filter(o => !o.ref_ocorrencia_id && o.status !== "cancelada"), cont = ocorrencias.filter(o => o.ref_ocorrencia_id);
+  const graves = novas.filter(o => o.gravidade === "critica" || o.gravidade === "alta");
+  const vRes = verificacoes.filter(v => v.resultado === "resolvido").length;
+  const corpo = cartaoH([[novas.length, "Ocorrências novas"], [graves.length, "Críticas ou altas", graves.length > 0], [cont.length, "Continuam (registradas de novo)", cont.length > 0], [`${vRes}/${verificacoes.length}`, "Pendências resolvidas na conferência"]])
+    + `<p style="margin:0 0 10px"><b>Auditor:</b> ${esc(aud.colaborador_nome)} · <b>Horário:</b> ${horaDe(aud.horario_inicio)}–${horaDe(aud.horario_finalizacao)} (${duracao(aud.horario_inicio, aud.horario_finalizacao)}) · <b>Setores:</b> ${setores.filter(x => x.status === "concluido").length}/${setores.length}</p>`
+    + (ocorrencias.length ? `<div style="font-weight:700;color:#1F2A44;margin-top:6px">Ocorrências do dia</div>` + tabelaH(["Nº", "Setor", "Tipo", "Gravidade", "Situação"], ocorrencias.map(o => [esc(o.numero), esc(o.setor_nome), esc(o.tipo_ocorrencia) + (o.ref_numero ? `<br><span style="color:#B7791F;font-size:12px">continuação de ${esc(o.ref_numero)}</span>` : ""), gravTxt[o.gravidade] || "", ocStTxt[o.status] || ""])) : `<p>Nenhuma ocorrência nova. 👍</p>`)
+    + (aud.observacao_final ? `<div style="font-weight:700;color:#1F2A44">Observação do auditor</div><p style="margin:4px 0 12px">${escH(aud.observacao_final)}</p>` : "");
+  const { anexo, nota } = await anexoDe(rel);
+  const assunto = `Auditoria ${brData(aud.data)} · ${aud.colaborador_nome} · ${novas.length} ocorrência(s)${graves.length ? ` · ${graves.length} crítica/alta` : ""}`;
+  const j = await chamarScript({ acao: "enviar", chave: EMAIL_CHAVE_ENVIO, tipo: "diario", assunto, html: moldeH("Auditoria operacional do dia", `${DIAS[dow(aud.data)]}, ${brData(aud.data)}`, corpo, nota), anexo });
+  try { await updateDoc(doc(db, "auditorias", rel.audId), { email_enviado_em: nowISO(), email_erro: null }); } catch (e) { console.warn(e); }
+  return j;
+}
+async function enviarEmailSemanal(rel) {
+  const { dias, ocs, verifs, abertas, seg, sex } = rel;
+  const fin = dias.filter(d => d.auds.some(a => a.status === "finalizada"));
+  const naoFez = dias.filter(d => d.data < S.hoje && !d.auds.some(a => a.status === "finalizada"));
+  const novas = ocs.filter(o => !o.ref_ocorrencia_id && o.status !== "cancelada");
+  const pontas = ocs.filter(o => o.status !== "cancelada" && o.status !== "substituida");
+  const res = pontas.filter(o => o.status === "resolvida").length;
+  const corpo = cartaoH([[`${fin.length} de ${dias.length}`, "Rondas realizadas", naoFez.length > 0], [novas.length, "Ocorrências novas"], [res, "Resolvidas até agora"], [abertas.length, "Abertas para a próxima semana", abertas.some(o => o.gravidade === "critica")]])
+    + `<div style="font-weight:700;color:#1F2A44">Dia a dia</div>` + tabelaH(["Dia", "Auditor", "Situação", "Ocorrências"], dias.map(d => {
+      const a = d.auds.find(x => x.status === "finalizada") || d.auds[0];
+      const sit = a?.status === "finalizada" ? "Finalizada" : d.data < S.hoje ? `<b style="color:#C0392B">Não realizada</b>` : d.data === S.hoje ? "Hoje" : "Programada";
+      return [`${DIAS[dow(d.data)].slice(0, 3)} ${brData(d.data).slice(0, 5)}`, esc(a?.colaborador_nome || d.atrib?.colaborador_nome || "—"), sit, String(novas.filter(o => o.auditoria_data === d.data).length)];
+    }))
+    + (abertas.length ? `<div style="font-weight:700;color:#1F2A44">Pendências para a próxima semana</div>` + tabelaH(["Nº", "Setor", "Tipo", "Gravidade"], [...abertas].sort((a, b) => String(a.auditoria_data).localeCompare(String(b.auditoria_data))).slice(0, 30).map(o => [esc(o.numero), esc(o.setor_nome), esc(o.tipo_ocorrencia), gravTxt[o.gravidade] || ""])) + (abertas.length > 30 ? `<p style="font-size:12px;color:#5E6A7D">…e mais ${abertas.length - 30} no Word.</p>` : "") : `<p>Nenhuma pendência aberta para a próxima semana. 👍</p>`);
+  const { anexo, nota } = await anexoDe(rel);
+  const assunto = `Auditoria semanal ${brData(seg).slice(0, 5)} a ${brData(sex)} · ${fin.length}/${dias.length} rondas · ${novas.length} ocorrência(s)`;
+  return chamarScript({ acao: "enviar", chave: EMAIL_CHAVE_ENVIO, tipo: "semanal", assunto, html: moldeH("Auditoria operacional da semana", `${brData(seg)} a ${brData(sex)}`, corpo, nota), anexo });
+}
+async function reenviarDiario(audId) {
+  if (!emailAtivo()) throw falha("E-mail ainda não configurado (Painel → Configuração).");
+  const rel = await gerarRelatorioDocx(audId, { baixar: false });
+  const j = await enviarEmailDiario(rel);
+  toast(`E-mail enviado para ${j.enviados} destinatário(s)`);
+}
+async function reenviarSemanal(seg) {
+  if (!emailAtivo()) throw falha("E-mail ainda não configurado (Painel → Configuração).");
+  const rel = await gerarRelatorioSemanal(seg, { baixar: false });
+  const j = await enviarEmailSemanal(rel);
+  toast(`Relatório da semana enviado para ${j.enviados} destinatário(s)`);
+}
+// configuração (só líder): endereço do script é público; chave de líder e lista ficam em config_privada
+async function carregarEmailPriv() {
+  try { const s = await getDoc(doc(db, "config_privada", "email")); S.emailPriv = s.exists() ? s.data() : {}; }
+  catch (e) { S.emailPriv = {}; }
+}
+function lerLista(txt) {
+  const l = [...new Set(String(txt).split(/[\s,;]+/).map(x => x.trim().toLowerCase()).filter(Boolean))];
+  const ruins = l.filter(x => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  if (ruins.length) throw falha("E-mail inválido: " + ruins.join(", "));
+  return l;
+}
+async function salvarEmail(f) {
+  const url = f.url.trim(), chave = f.chave.trim();
+  const lista = lerLista(f.lista);
+  if (!url) throw falha("Cole o endereço do script (termina em /exec).");
+  if (!/^https:\/\/script\.google\.com\/macros\/s\/.+\/exec$/.test(url)) throw falha("O endereço do script deve começar com https://script.google.com/macros/s/ e terminar com /exec.");
+  if (!chave) throw falha("Cole a chave de líder.");
+  if (!lista.length) throw falha("Informe pelo menos um destinatário.");
+  const j = await chamarScript({ acao: "destinatarios", chave_admin: chave, lista }, url);
+  await setDoc(doc(db, "config_privada", "email"), { chave_admin: chave, lista: j.lista, alterado_por: S.adminNome, alterado_em: nowISO() });
+  await setDoc(doc(db, "config", "geral"), { email_url: url, alterado_por: S.adminNome, alterado_em: nowISO() }, { merge: true });
+  S.emailPriv = { chave_admin: chave, lista: j.lista }; S.formEmail = null;
+  toast(`E-mail configurado: ${j.lista.length} destinatário(s)`);
+}
+async function testarEmail() {
+  const chave = S.emailPriv?.chave_admin;
+  if (!emailAtivo() || !chave) throw falha("Salve a configuração de e-mail primeiro.");
+  const j = await chamarScript({ acao: "teste", chave_admin: chave });
+  toast(`E-mail de teste enviado para ${j.enviados} destinatário(s). Ainda dá para mandar ${j.cota} hoje.`);
 }
 
 /* ================= CSV ================= */
@@ -1454,9 +1582,9 @@ function tabInd() {
   const per = [["7", "7 dias"], ["30", "30 dias"], ["90", "90 dias"], ["mes", "Este mês"], ["custom", "Personalizado"]];
   const ctrl = `<div class="row" style="margin-bottom:12px"><div class="chips">${per.map(([v, l]) => `<button data-act="ind-per" data-v="${v}" class="${i.per === v ? "on" : ""}">${l}</button>`).join("")}</div>
     ${i.per === "custom" ? `<div class="row"><input type="date" data-ind="ini" value="${i.ini}" aria-label="Início" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"><span>até</span><input type="date" data-ind="fim" value="${i.fim}" aria-label="Fim" style="padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2)"></div>` : ""}</div>`;
-  const semSex = addDias(i.sem, 4), atual = i.sem === segundaDe(S.hoje);
-  const semanal = `<div class="panel semanal"><div class="row"><div><h2 style="margin:0">Relatório da semana</h2><p class="muted" style="margin:2px 0 0;font-size:14px">Word com resumo, dia a dia, rankings, pendências e todas as ocorrências com fotos. Na sexta, baixa sozinho ao finalizar a ronda.</p></div></div>
-    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="sem-nav" data-v="-7" aria-label="Semana anterior">‹</button><b class="cond" style="font-size:18px">${brData(i.sem)} a ${brData(semSex)}</b><button class="btn sm" data-act="sem-nav" data-v="7" ${atual ? "disabled" : ""} aria-label="Próxima semana">›</button>${atual ? `<span class="badge b-pend">Semana atual</span>` : ""}<button class="btn sm dark sp" data-act="sem-docx">Baixar relatório da semana</button></div></div>`;
+  const semSex = fimSemana(i.sem), atual = i.sem === segundaDe(S.hoje);
+  const semanal = `<div class="panel semanal"><div class="row"><div><h2 style="margin:0">Relatório da semana</h2><p class="muted" style="margin:2px 0 0;font-size:14px">Word com resumo, dia a dia, rankings, pendências e todas as ocorrências com fotos. ${comSabado() ? "No sábado" : "Na sexta"}, baixa sozinho ao finalizar a ronda.</p></div></div>
+    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="sem-nav" data-v="-7" aria-label="Semana anterior">‹</button><b class="cond" style="font-size:18px">${brData(i.sem)} a ${brData(semSex)}</b><button class="btn sm" data-act="sem-nav" data-v="7" ${atual ? "disabled" : ""} aria-label="Próxima semana">›</button>${atual ? `<span class="badge b-pend">Semana atual</span>` : ""}<button class="btn sm dark sp" data-act="sem-docx">Baixar relatório da semana</button>${emailAtivo() ? `<button class="btn sm" data-act="email-sem">Enviar por e-mail</button>` : ""}</div></div>`;
   if (!D) return ctrl + semanal + `<div class="panel">Carregando indicadores…</div>`;
   const { auds, ocs, verifs, abertas, resolvidasPer, ini, fim, atribs = [] } = D;
   const fin = auds.filter(a => a.status === "finalizada");
@@ -1638,7 +1766,7 @@ async function sair() { await signOut(auth); S.view = "main"; }
 /* ================= ADMIN: PROGRAMAÇÃO ================= */
 async function carregarProg() {
   S.progDias = await getProgramacaoSemana(S.progRef);
-  const seg = segundaDe(S.progRef), auds = await audsEntre(seg, addDias(seg, 4));
+  const seg = segundaDe(S.progRef), auds = await audsEntre(seg, fimSemana(seg));
   S.progAuds = {};
   auds.forEach(a => (S.progAuds[a.data] ||= []).push(a));
   await carregarCiclo();
@@ -1778,7 +1906,7 @@ function render() {
 const emBreve = (t, m) => `<div class="panel"><h2>${t}</h2><p class="muted">${m}</p></div>`;
 
 function semanaHtml(dias, audsMap, destacarHoje = true) {
-  return `<div class="week">${dias.map(d => {
+  return `<div class="week ${dias.length === 6 ? "w6" : ""}">${dias.map(d => {
     const st = statusDoDia(audsMap[d.data] || [], d.data), isHoje = d.data === S.hoje;
     return `<div class="day ${isHoje && destacarHoje ? "today" : ""}"><b>${DIAS[dow(d.data)].slice(0, 3)} ${d.data.slice(8)}</b><div>${esc(d.atrib?.colaborador_nome || "Sem responsável")}</div><div style="margin-top:4px"><span class="badge ${stDiaBadge[st]}">${stDiaTxt[st]}</span></div>
       ${isHoje && !S.aud && S.atrib ? `<button class="btn sm primary exec-only" style="margin-top:6px" data-act="iniciar">Iniciar</button>` : ""}</div>`;
@@ -1793,7 +1921,7 @@ function tabHoje() {
   const hero = `<section class="hero">
     <div class="date">${DIAS[dow(S.hoje)]}, ${brData(S.hoje)} · ${status}</div>
     <div class="who">${esc(a?.colaborador_nome || quem)}</div>
-    <div class="role">${!diaUtil(S.hoje) ? "Fim de semana: o rodízio vale de segunda a sexta" : semColab ? "Cadastre colaboradores no Painel administrativo" : "Responsável pela ronda de hoje, definido pelo rodízio"}</div>
+    <div class="role">${!diaUtil(S.hoje) ? (comSabado() ? "Domingo: o rodízio vale de segunda a sábado" : "Fim de semana: o rodízio vale de segunda a sexta") : semColab ? "Cadastre colaboradores no Painel administrativo" : "Responsável pela ronda de hoje, definido pelo rodízio"}</div>
     <div class="stats">
       <div><b>${horaDe(a?.horario_inicio)}</b>Início</div>
       <div><b>${horaDe(a?.horario_finalizacao)}</b>Finalização</div>
@@ -1802,7 +1930,7 @@ function tabHoje() {
     </div></section>`;
   let acaoHtml = "";
   if (!a && S.atrib) acaoHtml = `<button class="btn primary block exec-only" data-act="iniciar">Iniciar auditoria</button><p class="muted" style="text-align:center">${S.modo === "ver" ? "Mude para Executar para iniciar a ronda." : "O horário de início é registrado automaticamente."}</p>`;
-  else if (a?.status === "finalizada") acaoHtml = `<div class="panel"><h2>Auditoria finalizada às ${horaDe(a.horario_finalizacao)}</h2>${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}<p class="muted">Duração: ${duracao(a.horario_inicio, a.horario_finalizacao)}</p>${a.relatorio_gerado_em ? `<p class="muted" style="font-size:14px">Último relatório gerado às ${horaDe(a.relatorio_gerado_em)}</p>` : ""}<div class="row"><button class="btn dark" data-act="docx" data-id="${a.id}">Baixar relatório Word</button><button class="btn" data-act="csv-aud" data-id="${a.id}" data-d="${a.data}">Exportar CSV</button></div></div>`;
+  else if (a?.status === "finalizada") acaoHtml = `<div class="panel"><h2>Auditoria finalizada às ${horaDe(a.horario_finalizacao)}</h2>${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}<p class="muted">Duração: ${duracao(a.horario_inicio, a.horario_finalizacao)}</p>${a.relatorio_gerado_em ? `<p class="muted" style="font-size:14px">Último relatório gerado às ${horaDe(a.relatorio_gerado_em)}</p>` : ""}${a.email_enviado_em ? `<p class="muted" style="font-size:14px">✉ E-mail enviado às ${horaDe(a.email_enviado_em)}</p>` : a.email_erro ? `<p style="font-size:14px;color:var(--bad)">✉ E-mail não enviado: ${esc(a.email_erro)}</p>` : ""}<div class="row"><button class="btn dark" data-act="docx" data-id="${a.id}">Baixar relatório Word</button>${emailAtivo() ? `<button class="btn" data-act="email-dia" data-id="${a.id}">${a.email_enviado_em ? "Reenviar e-mail" : "Enviar por e-mail"}</button>` : ""}<button class="btn" data-act="csv-aud" data-id="${a.id}" data-d="${a.data}">Exportar CSV</button></div></div>`;
 
   const setHtml = a ? `<div class="panel"><h2>Setores</h2>
     ${a.status === "em_andamento" && (a.total_ocorrencias || 0) > 0 ? `<div class="row" style="margin:-4px 0 8px"><button class="btn sm sp" data-act="csv-aud" data-id="${a.id}" data-d="${a.data}">Exportar CSV</button></div>` : ""}
@@ -2046,7 +2174,7 @@ function admHist() {
     return `<div class="hist ${ab ? "open" : ""}"><div class="row">
       <button class="histhead" data-act="hist-abrir" data-id="${a.id}" aria-expanded="${!!ab}"><b class="cond" style="font-size:18px">${brData(a.data)}</b> <span>${esc(a.colaborador_nome)}</span> ${badge(a.status)}
         <span class="muted s">${horaDe(a.horario_inicio)}–${horaDe(a.horario_finalizacao)} · ${duracao(a.horario_inicio, a.horario_finalizacao)} · ${a.total_ocorrencias || 0} ocorr. · ${a.total_pendencias_conferidas || 0} conf.</span></button>
-      <div class="sp row">${a.status === "finalizada" ? `<button class="btn sm dark" data-act="docx" data-id="${a.id}">${a.relatorio_gerado_em ? "Baixar .docx" : "Gerar .docx"}</button>` : ""}<button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir</button></div></div>
+      <div class="sp row">${a.status === "finalizada" ? `<button class="btn sm dark" data-act="docx" data-id="${a.id}">${a.relatorio_gerado_em ? "Baixar .docx" : "Gerar .docx"}</button>${emailAtivo() ? `<button class="btn sm" data-act="email-dia" data-id="${a.id}" title="${a.email_enviado_em ? "Enviado em " + brData(a.email_enviado_em.slice(0, 10)) + " " + horaDe(a.email_enviado_em) : "Ainda não enviado"}">✉${a.email_enviado_em ? " ✓" : ""}</button>` : ""}` : ""}<button class="btn sm danger" data-act="excluir" data-id="${a.id}">Excluir</button></div></div>
       ${ab ? `<div class="histbody">
         ${a.observacao_final ? `<p><b>Observação:</b> ${esc(a.observacao_final)}</p>` : ""}${a.auditoria_original_id ? `<p class="muted">Reinício da auditoria ${esc(a.auditoria_original_id)}</p>` : ""}
         <div class="tw"><table><thead><tr><th>Setor</th><th>Status</th><th>Abertura</th><th>Conclusão</th><th>Ocorr.</th></tr></thead><tbody>${ab.setores.map(s => `<tr><td>${esc(s.setor_nome)}</td><td>${stTxt[s.status]}</td><td>${horaDe(s.horario_inicio)}</td><td>${horaDe(s.horario_conclusao)}</td><td>${s.ocorrencias_count || 0}</td></tr>`).join("")}</tbody></table></div>
@@ -2061,7 +2189,15 @@ function admCfg() {
   <div class="field"><label><input type="checkbox" id="cfFoto" ${c.foto_obrigatoria !== false ? "checked" : ""}> Foto obrigatória ao registrar ocorrência</label></div>
   <div class="field"><label>Logo do relatório</label><div class="row">${S.logo === undefined ? `<span class="muted">Carregando…</span>` : S.logo ? `<img src="${S.logo}" alt="Logo atual" class="logoprev"><button class="btn sm" data-act="logo">Trocar logo</button><button class="btn sm danger" data-act="logo-del">Voltar ao padrão</button>` : `<img src="${LOGO_PADRAO()}" alt="Logo padrão" class="logoprev"><span class="muted" style="font-size:13px">Logo padrão Lojas MM</span><button class="btn sm" data-act="logo">Enviar outro</button>`}</div>
   <p class="muted" style="font-size:13px;margin:4px 0 0">PNG com fundo transparente fica melhor. A imagem é reduzida automaticamente.</p></div>
-  <button class="btn primary" data-act="cfg">Salvar configuração</button></div>`;
+  <div class="field"><label><input type="checkbox" id="cfSab" ${comSabado() ? "checked" : ""}> Ronda aos sábados (rodízio de segunda a sábado; o relatório da semana sai no sábado)</label></div>
+  <button class="btn primary" data-act="cfg">Salvar configuração</button>
+  <div class="cfgsec"><h3>E-mail dos relatórios</h3>
+  <p class="muted" style="font-size:14px;margin-top:0">Ao finalizar a ronda, o relatório do dia vai por e-mail para a lista abaixo; no último dia da semana vai também o semanal. Sai da conta Google do Estoque (limite do Gmail: 100 destinatários por dia).</p>
+  ${S.emailPriv === undefined ? `<p class="muted">Carregando…</p>` : `
+  <div class="field"><label for="cfEmailUrl">Endereço do script (termina em /exec)</label><input id="cfEmailUrl" autocomplete="off" value="${esc(S.formEmail?.url ?? c.email_url ?? "")}" placeholder="https://script.google.com/macros/s/…/exec"></div>
+  <div class="field"><label for="cfEmailChave">Chave de líder</label><input id="cfEmailChave" type="password" autocomplete="off" value="${esc(S.formEmail?.chave ?? S.emailPriv.chave_admin ?? "")}"></div>
+  <div class="field"><label for="cfEmailLista">Destinatários (um por linha)</label><textarea id="cfEmailLista" rows="4" placeholder="gerente@lojasmm.com.br">${esc(S.formEmail?.lista ?? (S.emailPriv.lista || []).join("\n"))}</textarea></div>
+  <div class="row"><button class="btn primary" data-act="email-salvar">Salvar e-mail</button>${emailAtivo() ? `<button class="btn" data-act="email-teste">Enviar e-mail de teste</button><span class="badge b-ok">Ativo</span>` : `<span class="badge b-neutral">Desligado</span>`}</div>`}</div></div>`;
 }
 
 /* ================= MODAL ================= */
@@ -2083,7 +2219,7 @@ document.addEventListener("click", e => {
   switch (a) {
     case "modo": S.modo = d.v; break;
     case "tab": S.tab = d.v; if (d.v === "dias") return acao(carregarMes); if (d.v === "pend") return acao(carregarTodas); if (d.v === "ind") return acao(carregarInd); break;
-    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "ind") return acao(carregarInd); if (d.v === "usr") return acao(carregarUsuarios); if (d.v === "perigo") return acao(carregarContagens); if (d.v === "cfg" && S.logo === undefined) return acao(carregarLogo); break;
+    case "atab": S.adminTab = d.v; if (d.v === "prog") return acao(carregarProg); if (d.v === "hist") return acao(carregarHist); if (d.v === "ind") return acao(carregarInd); if (d.v === "usr") return acao(carregarUsuarios); if (d.v === "perigo") return acao(carregarContagens); if (d.v === "cfg") return acao(async () => { if (S.logo === undefined) await carregarLogo(); await carregarEmailPriv(); }); break;
     case "go-main": S.view = "main"; break;
     case "go-admin": S.view = "admin"; if (S.isAdmin && S.adminTab === "prog") return acao(carregarProg); break;
     case "sair": return acao(sair);
@@ -2104,7 +2240,7 @@ document.addEventListener("click", e => {
     case "mover": return acao(() => moverCad(d.k, d.id, Number(d.v)));
     case "del": return acao(() => delCad(d.k, d.id));
     case "padrao": return acao(criarPadrao);
-    case "cfg": { const dados = { empresa_nome: $("#cfNome").value.trim(), empresa_subtitulo: $("#cfSub").value.trim(), foto_obrigatoria: $("#cfFoto").checked }; return acao(() => salvarConfig(dados)); }
+    case "cfg": { const dados = { empresa_nome: $("#cfNome").value.trim(), empresa_subtitulo: $("#cfSub").value.trim(), foto_obrigatoria: $("#cfFoto").checked, sabado: $("#cfSab").checked }; return acao(() => salvarConfig(dados)); }
     case "msg": return toast(d.m);
     case "registrar": return modalRegistrar(null);
     case "chip": { if (!F && d.k !== "x") return; F[d.k] = d.v; el.parentElement.querySelectorAll("button").forEach(b => b.classList.toggle("on", b === el)); if (d.k === "acao") atualizarObrigatorios();
@@ -2128,6 +2264,10 @@ document.addEventListener("click", e => {
     case "hist-abrir": return acao(() => abrirHist(d.id));
     case "logo": $("#logoInput").value = ""; return $("#logoInput").click();
     case "logo-del": return acao(removerLogo);
+    case "email-dia": return acao(() => reenviarDiario(d.id));
+    case "email-sem": return acao(() => reenviarSemanal(S.ind.sem));
+    case "email-salvar": { S.formEmail = { url: $("#cfEmailUrl").value, chave: $("#cfEmailChave").value, lista: $("#cfEmailLista").value }; const f = S.formEmail; return acao(() => salvarEmail(f)); }
+    case "email-teste": return acao(testarEmail);
     case "usr-criar": { S.formUsr = { nome: $("#uNome").value, usuario: $("#uUser").value, senha: $("#uSenha").value }; const f = S.formUsr; return acao(() => criarUsuario(f.nome, f.usuario, f.senha)); }
     case "usr-alt": return acao(() => alternarUsuario(d.id));
     case "minha-senha": return modalSenha(false);
